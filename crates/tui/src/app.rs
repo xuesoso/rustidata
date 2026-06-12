@@ -79,6 +79,8 @@ pub struct App {
     pub last_search: Option<(regex::Regex, bool, bool)>,
     /// Data rows on screen, updated each draw (page size).
     pub nscreen: u64,
+    /// Screen width in cells, updated each draw.
+    pub screen_width: u16,
     /// Graph payloads keyed by their placeholder sheet id.
     pub graphs: crate::canvas::GraphStore,
 }
@@ -105,6 +107,7 @@ impl App {
                 input_history: Default::default(),
                 last_search: None,
                 nscreen: 25,
+                screen_width: 80,
                 graphs: Default::default(),
             },
             tx,
@@ -391,6 +394,7 @@ fn draw_all(app: &mut App, sb: &mut ScreenBuffer) {
     let opts = app.opts.clone();
     let theme = app.theme.clone();
     let width = sb.width();
+    app.screen_width = width;
 
     if let Some(sheet) = app.sheets.last_mut() {
         sheet.clamp_view(nscreen);

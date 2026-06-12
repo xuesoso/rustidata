@@ -38,7 +38,7 @@ pub static BINDINGS: &[(&str, &str, &str)] = &[
     ("zr", "go-row-input", "go to row number"),
     // column ops
     ("-", "hide-col", "hide current column"),
-    ("_", "resize-col-max", "size current column to fit"),
+    ("_", "resize-col-max", "toggle column width between longest visible value and default"),
     ("z_", "resize-col-input", "set current column width"),
     ("!", "key-col", "toggle current column as key column"),
     ("^", "rename-col", "rename current column"),
@@ -192,10 +192,19 @@ pub fn execute(app: &mut App, longname: &str) -> Result<()> {
             }
         })?,
         "resize-col-max" => {
-            let s = sheet_or_return!(app);
-            if let Some(ci) = s.cursor_col_index() {
-                s.columns[ci].width = None; // auto-fit
-            }
+            let nscreen = app.nscreen;
+            let cap = app.screen_width;
+            with_columns_undo(app, "resize column", |s| {
+                if let Some(ci) = s.cursor_col_index() {
+                    let maxw = crate::draw_sheet::max_col_width(s, ci, nscreen, cap);
+                    let col = &mut s.columns[ci];
+                    col.width = if col.width == Some(maxw) {
+                        None // collapse back to default auto-fit
+                    } else {
+                        Some(maxw)
+                    };
+                }
+            })?
         }
         "resize-col-input" => {
             let cur = app

@@ -61,16 +61,25 @@ fn col_width(sheet: &Sheet, opts: &Options, ci: usize, nscreen: u64) -> u16 {
     if let Some(w) = col.width {
         return w.max(MIN_COL_WIDTH);
     }
-    // auto: sample header + visible rows
+    max_col_width(sheet, ci, nscreen, opts.max_width)
+}
+
+/// Max display width of the header and visible-row values for column `ci`,
+/// capped at `cap` (e.g. screen width for full expansion).
+pub fn max_col_width(sheet: &Sheet, ci: usize, nscreen: u64, cap: u16) -> u16 {
+    let col = &sheet.columns[ci];
     let mut w = dispwidth(&col.header_text());
     let top = sheet.view.top_row;
     for vi in top..(top + nscreen).min(sheet.nrows()) {
         if let Some(rid) = sheet.rowid_at(vi) {
             let disp = col.display_value(sheet, rid);
             w = w.max(dispwidth(&disp));
+            if w >= cap as usize {
+                break;
+            }
         }
     }
-    (w as u16).clamp(MIN_COL_WIDTH, opts.max_width)
+    (w as u16).clamp(MIN_COL_WIDTH, cap)
 }
 
 /// Scroll left_col so the cursor column is on screen.
