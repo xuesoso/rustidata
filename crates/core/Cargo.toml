@@ -1,0 +1,29 @@
+[package]
+name = "rustidata-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+compact_str.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+rayon.workspace = true
+regex.workspace = true
+lru.workspace = true
+roaring.workspace = true
+memchr.workspace = true
+memmap2.workspace = true
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
+chrono.workspace = true
+serde.workspace = true
+rhai.workspace = true
+
+flate2.workspace = true
+bzip2.workspace = true
+liblzma.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
