@@ -17,7 +17,7 @@ pub struct ColLayout {
     pub w: u16,
 }
 
-const MIN_COL_WIDTH: u16 = 4;
+pub const MIN_COL_WIDTH: u16 = 4;
 
 /// Compute layout for the visible viewport. Key columns first, then non-key
 /// columns starting at `sheet.view.left_col`.
@@ -26,11 +26,13 @@ pub fn calc_layout(sheet: &Sheet, opts: &Options, width: u16, nscreen: u64) -> V
     let nkeys = sheet.n_key_cols();
     let mut layout = Vec::new();
     let mut x: u16 = 0;
-    let sep_w = 1u16;
+    let sep_w = opts.col_gap;
 
     let mut place = |ci: usize, vis_idx: usize, x: &mut u16| -> bool {
-        let w = col_width(sheet, opts, ci, nscreen);
-        if *x + w + sep_w > width {
+        // clamp to remaining space so an over-wide column renders truncated
+        // at the screen edge instead of disappearing entirely
+        let w = col_width(sheet, opts, ci, nscreen).min(width.saturating_sub(*x + sep_w));
+        if w < MIN_COL_WIDTH {
             return false;
         }
         layout.push(ColLayout {
@@ -56,7 +58,8 @@ pub fn calc_layout(sheet: &Sheet, opts: &Options, width: u16, nscreen: u64) -> V
     layout
 }
 
-fn col_width(sheet: &Sheet, opts: &Options, ci: usize, nscreen: u64) -> u16 {
+/// Width the column currently renders at (explicit width, or auto-fit sample).
+pub fn col_width(sheet: &Sheet, opts: &Options, ci: usize, nscreen: u64) -> u16 {
     let col = &sheet.columns[ci];
     if let Some(w) = col.width {
         return w.max(MIN_COL_WIDTH);
@@ -126,6 +129,19 @@ pub fn draw(
     let truncator = if theme.ascii_only { "~" } else { &opts.disp_truncator };
     let col_sep = if theme.ascii_only { "|" } else { opts.disp_column_sep.as_str() };
     let key_sep = if theme.ascii_only { "!" } else { opts.disp_keycol_sep.as_str() };
+    // center the 1-cell separator glyph in the col_gap-wide gutter
+    let gap = opts.col_gap as usize;
+    let pad_l = gap.saturating_sub(1) / 2;
+    let pad_r = gap.saturating_sub(1) - pad_l;
+    let pad = |sep: &str| {
+        if gap == 0 {
+            String::new()
+        } else {
+            format!("{}{}{}", " ".repeat(pad_l), sep, " ".repeat(pad_r))
+        }
+    };
+    let col_sep = pad(col_sep);
+    let key_sep = pad(key_sep);
     let nkeys = sheet.n_key_cols();
 
     // header
@@ -140,7 +156,7 @@ pub fn draw(
         }
         let text = fit(&col.header_text(), l.w as usize, truncator);
         sb.put_str(l.x, y0, &text, style);
-        let sep = if l.vis_idx + 1 == nkeys { key_sep } else { col_sep };
+        let sep = if l.vis_idx + 1 == nkeys { &key_sep } else { &col_sep };
         sb.put_str(l.x + l.w, y0, sep, sep_style);
     }
 
@@ -189,7 +205,7 @@ pub fn draw(
                 fit(&disp, l.w as usize, truncator)
             };
             sb.put_str(l.x, y, &cell, style);
-            let sep = if l.vis_idx + 1 == nkeys { key_sep } else { col_sep };
+            let sep = if l.vis_idx + 1 == nkeys { &key_sep } else { &col_sep };
             sb.put_str(l.x + l.w, y, sep, sep_style);
         }
     }

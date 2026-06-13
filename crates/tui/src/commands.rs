@@ -40,6 +40,8 @@ pub static BINDINGS: &[(&str, &str, &str)] = &[
     ("-", "hide-col", "hide current column"),
     ("_", "resize-col-max", "toggle column width between longest visible value and default"),
     ("z_", "resize-col-input", "set current column width"),
+    (">", "resize-col-wider", "increase current column width by 1"),
+    ("<", "resize-col-narrower", "decrease current column width by 1"),
     ("!", "key-col", "toggle current column as key column"),
     ("^", "rename-col", "rename current column"),
     ("H", "slide-left", "move current column left"),
@@ -203,6 +205,18 @@ pub fn execute(app: &mut App, longname: &str) -> Result<()> {
                     } else {
                         Some(maxw)
                     };
+                }
+            })?
+        }
+        "resize-col-wider" | "resize-col-narrower" => {
+            let nscreen = app.nscreen;
+            let opts = app.opts.clone();
+            let delta: i32 = if longname == "resize-col-wider" { 1 } else { -1 };
+            with_columns_undo(app, "resize column", |s| {
+                if let Some(ci) = s.cursor_col_index() {
+                    let cur = crate::draw_sheet::col_width(s, &opts, ci, nscreen) as i32;
+                    let w = (cur + delta).max(crate::draw_sheet::MIN_COL_WIDTH as i32);
+                    s.columns[ci].width = Some(w as u16);
                 }
             })?
         }

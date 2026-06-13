@@ -57,17 +57,70 @@ pub fn config_path() -> Option<PathBuf> {
     Some(bare) // default location for first write
 }
 
-pub fn load() -> ConfigFile {
-    let Some(path) = config_path() else {
-        return ConfigFile::default();
+/// A loaded config plus any problems found while parsing it. Warnings must be
+/// surfaced in the UI: stderr is hidden as soon as the TUI takes the screen,
+/// so a config error printed there is effectively invisible.
+pub struct Loaded {
+    pub config: ConfigFile,
+    pub warnings: Vec<String>,
+}
+
+pub fn load() -> Loaded {
+    let mut warnings = Vec::new();
+    let config = match config_path() {
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(text) => parse_sections(&text, &path.display().to_string(), &mut warnings),
+            Err(_) => ConfigFile::default(),
+        },
+        None => ConfigFile::default(),
     };
-    match std::fs::read_to_string(&path) {
-        Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
-            eprintln!("rustidata: bad config {}: {}", path.display(), e);
-            ConfigFile::default()
-        }),
-        Err(_) => ConfigFile::default(),
+    Loaded { config, warnings }
+}
+
+/// Parse the config section by section, so one bad section (e.g. a hand-edited
+/// [options] typo) doesn't silently discard the rest — like the persisted theme.
+fn parse_sections(text: &str, origin: &str, warnings: &mut Vec<String>) -> ConfigFile {
+    let mut cfg = ConfigFile::default();
+    let table: toml::Table = match text.parse() {
+        Ok(t) => t,
+        Err(e) => {
+            warnings.push(format!("bad config {}: {}", origin, one_line(&e.to_string())));
+            return cfg;
+        }
+    };
+    if let Some(v) = table.get("options") {
+        match v.clone().try_into() {
+            Ok(o) => cfg.options = o,
+            Err(e) => warnings.push(format!("config [options]: {}", one_line(&e.to_string()))),
+        }
     }
+    match table.get("theme") {
+        // tolerate the shorthand `theme = "name"` form
+        Some(toml::Value::String(name)) => cfg.theme.name = name.clone(),
+        Some(v) => match v.clone().try_into() {
+            Ok(t) => cfg.theme = t,
+            Err(e) => warnings.push(format!("config [theme]: {}", one_line(&e.to_string()))),
+        },
+        None => {}
+    }
+    if let Some(v) = table.get("colors") {
+        match v.clone().try_into() {
+            Ok(c) => cfg.colors = c,
+            Err(e) => warnings.push(format!("config [colors]: {}", one_line(&e.to_string()))),
+        }
+    }
+    if let Some(v) = table.get("keybindings") {
+        match v.clone().try_into() {
+            Ok(k) => cfg.keybindings = k,
+            Err(e) => warnings.push(format!("config [keybindings]: {}", one_line(&e.to_string()))),
+        }
+    }
+    cfg
+}
+
+/// Squash a multi-line toml error (with span carets) onto one status line.
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Apply [colors] overrides from the config onto a theme.
@@ -88,13 +141,18 @@ pub fn persist_theme(name: &str) -> Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let text = std::fs::read_to_string(&path).unwrap_or_default();
+    std::fs::write(&path, upsert_theme_doc(&text, name))?;
+    Ok(())
+}
+
+fn upsert_theme_doc(text: &str, name: &str) -> String {
     let mut doc: toml_edit::DocumentMut = text.parse().unwrap_or_default();
-    if doc.get("theme").is_none() {
+    // replace a scalar `theme = "x"` (or missing section) with a proper table
+    if !doc.get("theme").map_or(false, |i| i.is_table_like()) {
         doc["theme"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
     doc["theme"]["name"] = toml_edit::value(name);
-    std::fs::write(&path, doc.to_string())?;
-    Ok(())
+    doc.to_string()
 }
 
 #[cfg(test)]
@@ -108,6 +166,7 @@ mod tests {
             [options]
             delimiter = ";"
             default_width = 25
+            plot_dot_radius = 5
 
             [theme]
             name = "gruvbox"
@@ -122,6 +181,7 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.options.delimiter, ";");
         assert_eq!(cfg.options.default_width, 25);
+        assert_eq!(cfg.options.plot_dot_radius, 5);
         assert_eq!(cfg.theme.name, "gruvbox");
         assert_eq!(cfg.keybindings["zq"], "quit-sheet");
     }
@@ -131,6 +191,37 @@ mod tests {
         let cfg: ConfigFile = toml::from_str("").unwrap();
         assert_eq!(cfg.theme.name, "default-dark");
         assert_eq!(cfg.options.default_width, 20);
+        assert_eq!(cfg.options.plot_dot_radius, 1);
+    }
+
+    #[test]
+    fn bad_options_section_does_not_drop_theme() {
+        let mut warnings = Vec::new();
+        let cfg = parse_sections(
+            "[options]\ndefault_width = \"oops\"\n\n[theme]\nname = \"gruvbox\"\n",
+            "test",
+            &mut warnings,
+        );
+        assert_eq!(cfg.theme.name, "gruvbox");
+        assert_eq!(cfg.options.default_width, 20); // bad section falls back
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("[options]"));
+    }
+
+    #[test]
+    fn top_level_theme_string_accepted() {
+        let mut warnings = Vec::new();
+        let cfg = parse_sections("theme = \"light\"\n", "test", &mut warnings);
+        assert_eq!(cfg.theme.name, "light");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn persist_replaces_scalar_theme() {
+        let out = upsert_theme_doc("theme = \"old\"\n[options]\ndelimiter = \",\"\n", "gruvbox-light");
+        let cfg: ConfigFile = toml::from_str(&out).unwrap();
+        assert_eq!(cfg.theme.name, "gruvbox-light");
+        assert_eq!(cfg.options.delimiter, ",");
     }
 
     #[test]

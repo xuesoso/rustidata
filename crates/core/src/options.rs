@@ -20,6 +20,9 @@ pub struct Options {
     pub disp_null: String,
     /// Column separator glyph.
     pub disp_column_sep: String,
+    /// Total gap between columns in cells; the separator glyph sits centered
+    /// in it. 0 = no gap or separator.
+    pub col_gap: u16,
     /// Key-column separator glyph.
     pub disp_keycol_sep: String,
     /// Default date format string.
@@ -28,6 +31,10 @@ pub struct Options {
     pub header: HeaderMode,
     /// Rows of slack kept above/below cursor when scrolling.
     pub scroll_context: u64,
+    /// Scatter-plot point radius in braille subpixels (0 = bare dot). The
+    /// vertical extent is doubled to match braille's 2x4 cell packing, so the
+    /// default 1 yields a ~2x4 footprint.
+    pub plot_dot_radius: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,10 +54,12 @@ impl Default for Options {
             disp_truncator: "…".into(),
             disp_null: "".into(),
             disp_column_sep: "│".into(),
+            col_gap: 3,
             disp_keycol_sep: "║".into(),
             fmt_date: "%Y-%m-%d %H:%M:%S".into(),
             header: HeaderMode::Auto,
             scroll_context: 0,
+            plot_dot_radius: 1,
         }
     }
 }
