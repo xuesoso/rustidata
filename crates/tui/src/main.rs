@@ -36,7 +36,7 @@ struct Cli {
     delimiter: Option<String>,
 
     /// Start with a specific theme (default-dark, light, monochrome, ascii,
-    /// solarized-dark, gruvbox)
+    /// solarized-dark, gruvbox, gruvbox-light)
     #[arg(short, long)]
     theme: Option<String>,
 
@@ -56,7 +56,10 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let cfg = config::load();
+    let config::Loaded {
+        config: cfg,
+        mut warnings,
+    } = config::load();
     let mut opts = cfg.options.clone();
     if let Some(d) = &cli.delimiter {
         opts.delimiter = d.clone();
@@ -64,13 +67,19 @@ fn main() -> anyhow::Result<()> {
 
     let theme_name = cli.theme.as_deref().unwrap_or(&cfg.theme.name);
     let mut theme = theme::theme_by_name(theme_name).unwrap_or_else(|| {
-        eprintln!("rustidata: unknown theme '{}', using default", theme_name);
+        warnings.push(format!("unknown theme '{}', using default", theme_name));
         theme::builtin_themes().remove(0)
     });
     config::apply_color_overrides(&mut theme, &cfg.colors);
 
     let (mut app, tx) = app::App::new(theme, opts);
     app.keybind_overrides = cfg.keybindings.clone();
+    for w in &warnings {
+        eprintln!("rustidata: {}", w); // visible if startup aborts pre-TUI
+    }
+    if let Some(w) = warnings.last() {
+        app.status(rustidata_core::jobs::Severity::Warning, w.clone());
+    }
 
     // open sources
     let notify = {

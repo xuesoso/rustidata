@@ -348,6 +348,32 @@ pub fn builtin_themes() -> Vec<Theme> {
                 (Loading, "175 on 235"),
             ],
         ),
+        theme(
+            "gruvbox-light",
+            false,
+            &[
+                (Default, "237 on 230"),
+                (Header, "bold 130 on 230"),
+                (CurrentRow, "reverse"),
+                (CurrentCol, "bold"),
+                (CurrentHdr, "bold reverse 130"),
+                (CurrentCell, "reverse bold"),
+                (KeyCol, "24 on 230"),
+                (SelectedRow, "100 on 230"),
+                (ColumnSep, "248"),
+                (Error, "124 on 230"),
+                (Warning, "130 on 230"),
+                (Note, "65 on 230"),
+                (Status, "bold 230 on 243"),
+                (TopStatus, "243 on 223"),
+                (Menu, "230 on 66"),
+                (MenuActive, "bold 230 on 24"),
+                (EditCell, "237 on 223"),
+                (GraphAxis, "bold 130"),
+                (Histogram, "24"),
+                (Loading, "96 on 230"),
+            ],
+        ),
     ]
 }
 

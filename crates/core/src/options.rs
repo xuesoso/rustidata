@@ -20,6 +20,9 @@ pub struct Options {
     pub disp_null: String,
     /// Column separator glyph.
     pub disp_column_sep: String,
+    /// Total gap between columns in cells; the separator glyph sits centered
+    /// in it. 0 = no gap or separator.
+    pub col_gap: u16,
     /// Key-column separator glyph.
     pub disp_keycol_sep: String,
     /// Default date format string.
@@ -47,6 +50,7 @@ impl Default for Options {
             disp_truncator: "…".into(),
             disp_null: "".into(),
             disp_column_sep: "│".into(),
+            col_gap: 3,
             disp_keycol_sep: "║".into(),
             fmt_date: "%Y-%m-%d %H:%M:%S".into(),
             header: HeaderMode::Auto,

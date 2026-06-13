@@ -20,7 +20,7 @@ target/release/rustidata .                 # directory browser
 | sort 5M rows | minutes | **1.4 s** (rayon-parallel, permutation only) |
 | frequency table, 5M rows | minutes | **1.2 s** |
 | delimiter detection | none (fixed option) | automatic (`,` `\t` `;` `\|`, quote-aware) |
-| color themes | per-option config only | 6 built-in themes, live switcher, persisted |
+| color themes | per-option config only | 7 built-in themes, live switcher, persisted |
 
 The trick: plain text files are memory-mapped and only a row-offset index is
 built (in a background thread, quote-aware when needed); rows are parsed on
@@ -44,7 +44,8 @@ Movement: `hjkl`/arrows, `g`-prefixed for far edges, `PgUp`/`PgDn`, `zr` go-to-r
 | `s` `t` `u`, `gs` `gt` `gu`, `\|` `\` `z\|` | selection (row / all / regex / expression) |
 | `e` `ge` `a` `d` `gd` | edit cell, set selected, add row, delete |
 | `y` `gy` `zy` `p` `zp` | clipboard (rows / cells, system clipboard synced) |
-| `!` `-` `_` `^` `H` `L` | key-col, hide, resize, rename, slide column |
+| `!` `-` `^` `H` `L` | key-col, hide, rename, slide column |
+| `_` `<` `>` `z_` | width: toggle fit-to-content, narrower / wider by 1, set exact |
 | `~` `#` `%` `@` `$` | column type: str / int / float / date / currency |
 | `=` `:` `;` `*` | expression column, regex split / capture / substitute |
 | `'` / `g'` | freeze column / sheet |
@@ -72,9 +73,10 @@ Config lives at `~/.config/rustidata/config` (TOML):
 [options]
 delimiter = ""        # empty = sniff automatically
 default_width = 20
+col_gap = 3           # cells between columns (separator glyph centered in it)
 
 [theme]
-name = "gruvbox"      # default-dark | light | monochrome | ascii | solarized-dark | gruvbox
+name = "gruvbox"      # default-dark | light | monochrome | ascii | solarized-dark | gruvbox | gruvbox-light
 
 [colors]              # per-slot overrides on top of the theme
 current_row = "bold white on 24"
@@ -93,7 +95,7 @@ preserving comments.
 - `crates/tui` — the binary
 
 ```
-cargo test --workspace            # 114 tests
+cargo test --workspace            # 118 tests
 scripts/bench_vs_visidata.sh     # generate data, benchmark both tools
 ```
 

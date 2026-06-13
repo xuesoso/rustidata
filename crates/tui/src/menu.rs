@@ -62,6 +62,8 @@ pub static MENUS: &[Menu] = &[
             MenuItem { label: "Toggle key", longname: "key-col" },
             MenuItem { label: "Rename", longname: "rename-col" },
             MenuItem { label: "Resize", longname: "resize-col-input" },
+            MenuItem { label: "Wider", longname: "resize-col-wider" },
+            MenuItem { label: "Narrower", longname: "resize-col-narrower" },
             MenuItem { label: "Type: string", longname: "type-string" },
             MenuItem { label: "Type: int", longname: "type-int" },
             MenuItem { label: "Type: float", longname: "type-float" },
