@@ -166,6 +166,7 @@ mod tests {
             [options]
             delimiter = ";"
             default_width = 25
+            plot_dot_radius = 5
 
             [theme]
             name = "gruvbox"
@@ -180,6 +181,7 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.options.delimiter, ";");
         assert_eq!(cfg.options.default_width, 25);
+        assert_eq!(cfg.options.plot_dot_radius, 5);
         assert_eq!(cfg.theme.name, "gruvbox");
         assert_eq!(cfg.keybindings["zq"], "quit-sheet");
     }
@@ -189,6 +191,7 @@ mod tests {
         let cfg: ConfigFile = toml::from_str("").unwrap();
         assert_eq!(cfg.theme.name, "default-dark");
         assert_eq!(cfg.options.default_width, 20);
+        assert_eq!(cfg.options.plot_dot_radius, 1);
     }
 
     #[test]

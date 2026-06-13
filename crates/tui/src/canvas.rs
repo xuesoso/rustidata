@@ -55,6 +55,35 @@ impl BrailleGrid {
         self.series[i] = series;
     }
 
+    /// Plot a point as a filled ellipse of subpixels centered on (px, py).
+    /// `radius` is the horizontal subpixel radius; the vertical radius is
+    /// doubled because braille cells pack 2x4 subpixels, so radius 4 yields a
+    /// roughly 8x16 footprint. radius 0 lights a single subpixel (a bare dot).
+    pub fn plot_point(&mut self, px: u32, py: u32, series: u8, radius: u32) {
+        if radius == 0 {
+            self.plot_pixel(px, py, series);
+            return;
+        }
+        let rx = radius as i64;
+        let ry = (radius * 2) as i64;
+        let (cx, cy) = (px as i64, py as i64);
+        for dy in -ry..=ry {
+            for dx in -rx..=rx {
+                // filled ellipse so the point reads round, not boxy
+                let fx = dx as f64 / rx as f64;
+                let fy = dy as f64 / ry as f64;
+                if fx * fx + fy * fy > 1.0 {
+                    continue;
+                }
+                let nx = cx + dx;
+                let ny = cy + dy;
+                if nx >= 0 && ny >= 0 {
+                    self.plot_pixel(nx as u32, ny as u32, series);
+                }
+            }
+        }
+    }
+
     pub fn cell_char(&self, cx: usize, cy: usize) -> Option<(char, u8)> {
         let i = cy * self.w + cx;
         let b = self.bits[i];
@@ -84,7 +113,13 @@ pub struct GraphData {
     pub ymax: f64,
     /// Full data bounds (for reset).
     pub data_bounds: (f64, f64, f64, f64),
+    /// Subpixel radius of each plotted point (0 = bare dot).
+    pub dot_radius: u32,
 }
+
+/// Default point radius: a ~2x4 subpixel footprint.
+const DEFAULT_DOT_RADIUS: u32 = 1;
+const MAX_DOT_RADIUS: u32 = 16;
 
 impl GraphData {
     fn from_points(
@@ -107,6 +142,7 @@ impl GraphData {
             ymin,
             ymax,
             data_bounds: (xmin, xmax, ymin, ymax),
+            dot_radius: DEFAULT_DOT_RADIUS,
         }
     }
 
@@ -207,7 +243,8 @@ pub fn open_graph(app: &mut App) -> Result<(), anyhow::Error> {
     let title = format!("{}_vs_{}", yname, xname);
     let parent_id = s.id;
 
-    let data = GraphData::from_points(points, vec![yname.clone()], xname);
+    let mut data = GraphData::from_points(points, vec![yname.clone()], xname);
+    data.dot_radius = app.opts.plot_dot_radius.min(MAX_DOT_RADIUS);
     // placeholder backing sheet so the stack/q semantics work
     let store = ColumnarStore::from_rows(1, Vec::<Vec<Value>>::new());
     let mut sheet = Sheet::new(
@@ -220,7 +257,7 @@ pub fn open_graph(app: &mut App) -> Result<(), anyhow::Error> {
     let gid = sheet.id;
     app.graphs.insert(gid, data);
     app.push_sheet(sheet);
-    app.info("graph: hjkl pan, +/- zoom, 0 reset, q close");
+    app.info("graph: hjkl pan, +/- zoom, ,/. dot size, 0 reset, q close");
     Ok(())
 }
 
@@ -235,6 +272,8 @@ pub fn handle_graph_key(app: &mut App, ks: &str) -> bool {
     match ks {
         "+" => g.zoom(0.5),
         "-" => g.zoom(2.0),
+        "." => g.dot_radius = (g.dot_radius + 1).min(MAX_DOT_RADIUS),
+        "," => g.dot_radius = g.dot_radius.saturating_sub(1),
         "0" => g.reset(),
         "h" | "Left" => g.pan(-0.1, 0.0),
         "l" | "Right" => g.pan(0.1, 0.0),
@@ -279,7 +318,7 @@ pub fn draw_graph(
         }
         let px = ((x - g.xmin) / (g.xmax - g.xmin) * (pw - 1.0)) as u32;
         let py = ((g.ymax - y) / (g.ymax - g.ymin) * (ph - 1.0)) as u32;
-        grid.plot_pixel(px, py, series);
+        grid.plot_point(px, py, series, g.dot_radius);
     }
 
     // plot cells
@@ -370,6 +409,22 @@ mod tests {
         let (ch, _) = g.cell_char(0, 0).unwrap();
         assert_eq!(ch as u32, 0x2800 + 0x81);
         assert!(g.cell_char(1, 0).is_none());
+    }
+
+    #[test]
+    fn plot_point_fattens() {
+        // radius 0 lights one subpixel; radius 4 lights a neighborhood.
+        let mut g0 = BrailleGrid::new(12, 10);
+        g0.plot_point(20, 20, 0, 0);
+        let lit0 = (0..g0.bits.len()).filter(|&i| g0.bits[i] != 0).count();
+        assert_eq!(lit0, 1);
+
+        let mut g = BrailleGrid::new(12, 10);
+        g.plot_point(20, 20, 0, 4);
+        assert!(g.cell_char(10, 5).is_some()); // center cell lit
+        assert!(g.cell_char(0, 0).is_none()); // far corner untouched
+        let lit = (0..g.bits.len()).filter(|&i| g.bits[i] != 0).count();
+        assert!(lit > lit0, "radius 4 should light more cells than radius 0");
     }
 
     #[test]
