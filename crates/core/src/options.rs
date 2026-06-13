@@ -28,6 +28,10 @@ pub struct Options {
     pub header: HeaderMode,
     /// Rows of slack kept above/below cursor when scrolling.
     pub scroll_context: u64,
+    /// Scatter-plot point radius in braille subpixels (0 = bare dot). The
+    /// vertical extent is doubled to match braille's 2x4 cell packing, so the
+    /// default 1 yields a ~2x4 footprint.
+    pub plot_dot_radius: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +55,7 @@ impl Default for Options {
             fmt_date: "%Y-%m-%d %H:%M:%S".into(),
             header: HeaderMode::Auto,
             scroll_context: 0,
+            plot_dot_radius: 1,
         }
     }
 }
