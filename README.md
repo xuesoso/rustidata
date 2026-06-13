@@ -1,5 +1,7 @@
 # rustidata
 
+[![CI](https://github.com/xuesoso/rustidata/actions/workflows/ci.yml/badge.svg)](https://github.com/xuesoso/rustidata/actions/workflows/ci.yml)
+
 A fast terminal tabular-data multitool — a Rust take on [VisiData](https://visidata.org),
 built for huge files.
 
