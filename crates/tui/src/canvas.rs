@@ -113,6 +113,10 @@ pub struct GraphData {
     pub ymax: f64,
     /// Full data bounds (for reset).
     pub data_bounds: (f64, f64, f64, f64),
+    /// True (unpadded) data value range, used to anchor axis tick labels so
+    /// they never fall outside the actual distribution of the values.
+    pub xdata: (f64, f64),
+    pub ydata: (f64, f64),
     /// Subpixel radius of each plotted point (0 = bare dot).
     pub dot_radius: u32,
 }
@@ -127,12 +131,12 @@ impl GraphData {
         series_names: Vec<String>,
         xname: String,
     ) -> Self {
-        let xmin = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
-        let xmax = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
-        let ymin = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
-        let ymax = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
-        let (xmin, xmax) = pad_range(xmin, xmax);
-        let (ymin, ymax) = pad_range(ymin, ymax);
+        let xlo = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+        let xhi = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+        let ylo = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let yhi = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+        let (xmin, xmax) = pad_range(xlo, xhi);
+        let (ymin, ymax) = pad_range(ylo, yhi);
         GraphData {
             points,
             series_names,
@@ -142,6 +146,8 @@ impl GraphData {
             ymin,
             ymax,
             data_bounds: (xmin, xmax, ymin, ymax),
+            xdata: (xlo, xhi),
+            ydata: (ylo, yhi),
             dot_radius: DEFAULT_DOT_RADIUS,
         }
     }
@@ -302,7 +308,8 @@ pub fn draw_graph(
     let axis = base.merge_over(&theme.get(StyleKey::GraphAxis));
     let width = sb.width();
     let left_margin: u16 = 10;
-    let bottom_margin: u16 = 2;
+    // axis line + tick-label row + axis-name row
+    let bottom_margin: u16 = 3;
     if width <= left_margin + 2 || height <= bottom_margin + 2 {
         return;
     }
@@ -336,34 +343,61 @@ pub fn draw_graph(
         }
     }
 
-    // y axis labels
-    let ymax_label = format_axis(g.ymax);
-    let ymin_label = format_axis(g.ymin);
-    sb.put_str(0, y0, &format!("{:>9}┤", ymax_label), axis);
-    sb.put_str(
-        0,
-        y0 + plot_h as u16 - 1,
-        &format!("{:>9}┤", ymin_label),
-        axis,
-    );
-    for cy in 1..plot_h.saturating_sub(1) {
-        sb.put_str(left_margin - 1, y0 + cy as u16, "│", axis);
+    // y axis: tick labels at the data-range quantiles that fall in view, with
+    // the vertical bar (│) filling the rows between them.
+    let mut yrow_label: Vec<Option<String>> = vec![None; plot_h];
+    for val in axis_ticks(g.ydata.0, g.ydata.1, g.ymin, g.ymax) {
+        let frac = (g.ymax - val) / (g.ymax - g.ymin);
+        let row = (frac * (plot_h as f64 - 1.0)).round();
+        if row.is_finite() && row >= 0.0 && (row as usize) < plot_h {
+            let r = row as usize;
+            yrow_label[r].get_or_insert_with(|| format_axis(val));
+        }
+    }
+    for (cy, slot) in yrow_label.iter().enumerate() {
+        let yy = y0 + cy as u16;
+        match slot {
+            Some(lbl) => {
+                sb.put_str(0, yy, &format!("{:>9}┤", lbl), axis);
+            }
+            None => {
+                sb.put_str(left_margin - 1, yy, "│", axis);
+            }
+        }
     }
 
-    // x axis
+    // x axis: tick marks (┬) on the baseline at the in-view data quantiles,
+    // with labels centered below (greedy left-to-right to avoid overlap).
     let xaxis_y = y0 + plot_h as u16;
-    let bar: String = "─".repeat(plot_w);
-    sb.put_str(left_margin, xaxis_y, &bar, axis);
+    let mut bar: Vec<char> = std::iter::repeat('─').take(plot_w).collect();
+    let mut xticks: Vec<(usize, String)> = Vec::new();
+    for val in axis_ticks(g.xdata.0, g.xdata.1, g.xmin, g.xmax) {
+        let frac = (val - g.xmin) / (g.xmax - g.xmin);
+        let col = (frac * (plot_w as f64 - 1.0)).round();
+        if col.is_finite() && col >= 0.0 && (col as usize) < plot_w {
+            let c = col as usize;
+            bar[c] = '┬';
+            if xticks.last().map_or(true, |&(pc, _)| pc != c) {
+                xticks.push((c, format_axis(val)));
+            }
+        }
+    }
+    let bar_str: String = bar.into_iter().collect();
+    sb.put_str(left_margin, xaxis_y, &bar_str, axis);
     sb.put_str(left_margin - 1, xaxis_y, "└", axis);
-    let xmin_label = format_axis(g.xmin);
-    let xmax_label = format_axis(g.xmax);
-    sb.put_str(left_margin, xaxis_y + 1, &xmin_label, axis);
-    let xr = (left_margin as usize + plot_w).saturating_sub(xmax_label.len());
-    sb.put_str(xr as u16, xaxis_y + 1, &xmax_label, axis);
+    let mut last_end: i32 = -1;
+    for (c, lbl) in &xticks {
+        let center = left_margin as usize + c;
+        let start = center.saturating_sub(lbl.len() / 2);
+        if start as i32 > last_end && start + lbl.len() <= width as usize {
+            sb.put_str(start as u16, xaxis_y + 1, lbl, axis);
+            last_end = (start + lbl.len()) as i32;
+        }
+    }
     let xmid = left_margin as usize + plot_w / 2;
     sb.put_str(
         xmid.saturating_sub(g.xname.len() / 2) as u16,
-        xaxis_y + 1,
+        xaxis_y + 2,
         &g.xname,
         axis,
     );
@@ -382,6 +416,24 @@ pub fn draw_graph(
         sb.put_str(lx as u16, ly, &label, style);
         ly += 1;
     }
+}
+
+/// Tick values at 0/25/50/75/100% of the data range `[dmin, dmax]`, keeping
+/// only those that fall inside the visible window `[vmin, vmax]`. Anchoring to
+/// the data range (not the viewport) means ticks never land outside the actual
+/// distribution: zooming out leaves them at the data quantiles rather than
+/// scattering labels across empty space, and zooming in drops the ones that
+/// scroll off screen.
+fn axis_ticks(dmin: f64, dmax: f64, vmin: f64, vmax: f64) -> Vec<f64> {
+    if !dmin.is_finite() || !dmax.is_finite() {
+        return Vec::new();
+    }
+    let span = dmax - dmin;
+    let eps = ((vmax - vmin).abs() * 1e-9).max(f64::EPSILON);
+    (0..=4)
+        .map(|k| dmin + span * (k as f64 / 4.0))
+        .filter(|&val| val >= vmin - eps && val <= vmax + eps)
+        .collect()
 }
 
 fn format_axis(v: f64) -> String {
@@ -425,6 +477,20 @@ mod tests {
         assert!(g.cell_char(0, 0).is_none()); // far corner untouched
         let lit = (0..g.bits.len()).filter(|&i| g.bits[i] != 0).count();
         assert!(lit > lit0, "radius 4 should light more cells than radius 0");
+    }
+
+    #[test]
+    fn axis_ticks_anchor_to_data() {
+        // default view (viewport = padded data range) shows all five quantiles
+        let t = axis_ticks(0.0, 100.0, -2.0, 102.0);
+        assert_eq!(t, vec![0.0, 25.0, 50.0, 75.0, 100.0]);
+        // zoomed in: only quantiles inside the window remain
+        assert_eq!(axis_ticks(0.0, 100.0, 40.0, 60.0), vec![50.0]);
+        // zoomed out keeps ticks anchored to the data range, none beyond it
+        let out = axis_ticks(0.0, 100.0, -50.0, 150.0);
+        assert_eq!(out, vec![0.0, 25.0, 50.0, 75.0, 100.0]);
+        // panned off the data entirely: no ticks
+        assert!(axis_ticks(0.0, 100.0, 200.0, 300.0).is_empty());
     }
 
     #[test]
