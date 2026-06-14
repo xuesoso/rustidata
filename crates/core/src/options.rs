@@ -31,9 +31,8 @@ pub struct Options {
     pub header: HeaderMode,
     /// Rows of slack kept above/below cursor when scrolling.
     pub scroll_context: u64,
-    /// Scatter-plot point radius in braille subpixels (0 = bare dot). The
-    /// vertical extent is doubled to match braille's 2x4 cell packing, so the
-    /// default 1 yields a ~2x4 footprint.
+    /// Scatter-plot point radius in braille subpixels (0 = bare dot). Applied
+    /// symmetrically on both axes, so the dot is a filled disc of this radius.
     pub plot_dot_radius: u32,
 }
 

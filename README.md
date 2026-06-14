@@ -52,7 +52,7 @@ Movement: `hjkl`/arrows, `g`-prefixed for far edges, `PgUp`/`PgDn`, `zr` go-to-r
 | `=` `:` `;` `*` | expression column, regex split / capture / substitute |
 | `'` / `g'` | freeze column / sheet |
 | `f` | fill nulls down |
-| `.` | braille scatter plot (`hjkl` pan, `+`/`-` zoom, `0` reset) |
+| `.` | braille scatter plot (`hjkl` pan, `+`/`-` zoom, `,`/`.` dot size, `0` reset) |
 | `U` / `R` | undo / redo |
 | `S` `C` `O` | sheets / columns / options metasheets |
 | `Enter` | dive: freq group → source rows, dir entry → file, db → table |
@@ -76,6 +76,7 @@ Config lives at `~/.config/rustidata/config` (TOML):
 delimiter = ""        # empty = sniff automatically
 default_width = 20
 col_gap = 3           # cells between columns (separator glyph centered in it)
+plot_dot_radius = 1   # scatter-plot point radius in subpixels (0 = single dot)
 
 [theme]
 name = "gruvbox"      # default-dark | light | monochrome | ascii | solarized-dark | gruvbox | gruvbox-light
@@ -97,7 +98,7 @@ preserving comments.
 - `crates/tui` — the binary
 
 ```
-cargo test --workspace            # 118 tests
+cargo test --workspace            # 122 tests
 scripts/bench_vs_visidata.sh     # generate data, benchmark both tools
 ```
 

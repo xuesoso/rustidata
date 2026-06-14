@@ -55,24 +55,20 @@ impl BrailleGrid {
         self.series[i] = series;
     }
 
-    /// Plot a point as a filled ellipse of subpixels centered on (px, py).
-    /// `radius` is the horizontal subpixel radius; the vertical radius is
-    /// doubled because braille cells pack 2x4 subpixels, so radius 4 yields a
-    /// roughly 8x16 footprint. radius 0 lights a single subpixel (a bare dot).
+    /// Plot a point as a filled disc of subpixels centered on (px, py), using
+    /// the same `radius` on both axes so the dot is symmetric. radius 0 lights
+    /// a single subpixel (a bare dot).
     pub fn plot_point(&mut self, px: u32, py: u32, series: u8, radius: u32) {
         if radius == 0 {
             self.plot_pixel(px, py, series);
             return;
         }
-        let rx = radius as i64;
-        let ry = (radius * 2) as i64;
+        let r = radius as i64;
         let (cx, cy) = (px as i64, py as i64);
-        for dy in -ry..=ry {
-            for dx in -rx..=rx {
-                // filled ellipse so the point reads round, not boxy
-                let fx = dx as f64 / rx as f64;
-                let fy = dy as f64 / ry as f64;
-                if fx * fx + fy * fy > 1.0 {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                // filled circle, equal extent each way
+                if dx * dx + dy * dy > r * r {
                     continue;
                 }
                 let nx = cx + dx;
@@ -121,7 +117,7 @@ pub struct GraphData {
     pub dot_radius: u32,
 }
 
-/// Default point radius: a ~2x4 subpixel footprint.
+/// Default point radius: a small symmetric dot a few subpixels across.
 const DEFAULT_DOT_RADIUS: u32 = 1;
 const MAX_DOT_RADIUS: u32 = 16;
 
@@ -319,13 +315,16 @@ pub fn draw_graph(
     let mut grid = BrailleGrid::new(plot_w, plot_h);
     let pw = grid.pixel_width() as f64;
     let ph = grid.pixel_height() as f64;
+    // Map a data value to a braille subpixel. Tick labels reuse these and then
+    // divide by the cell's subpixel size (px/2, py/4 — see plot_pixel) so a
+    // label lands on the exact cell its data value renders into.
+    let px_of = |x: f64| ((x - g.xmin) / (g.xmax - g.xmin) * (pw - 1.0)) as u32;
+    let py_of = |y: f64| ((g.ymax - y) / (g.ymax - g.ymin) * (ph - 1.0)) as u32;
     for &(x, y, series) in &g.points {
         if x < g.xmin || x > g.xmax || y < g.ymin || y > g.ymax {
             continue; // clip to view
         }
-        let px = ((x - g.xmin) / (g.xmax - g.xmin) * (pw - 1.0)) as u32;
-        let py = ((g.ymax - y) / (g.ymax - g.ymin) * (ph - 1.0)) as u32;
-        grid.plot_point(px, py, series, g.dot_radius);
+        grid.plot_point(px_of(x), py_of(y), series, g.dot_radius);
     }
 
     // plot cells
@@ -347,10 +346,8 @@ pub fn draw_graph(
     // the vertical bar (│) filling the rows between them.
     let mut yrow_label: Vec<Option<String>> = vec![None; plot_h];
     for val in axis_ticks(g.ydata.0, g.ydata.1, g.ymin, g.ymax) {
-        let frac = (g.ymax - val) / (g.ymax - g.ymin);
-        let row = (frac * (plot_h as f64 - 1.0)).round();
-        if row.is_finite() && row >= 0.0 && (row as usize) < plot_h {
-            let r = row as usize;
+        let r = (py_of(val) / 4) as usize;
+        if r < plot_h {
             yrow_label[r].get_or_insert_with(|| format_axis(val));
         }
     }
@@ -372,10 +369,8 @@ pub fn draw_graph(
     let mut bar: Vec<char> = std::iter::repeat('─').take(plot_w).collect();
     let mut xticks: Vec<(usize, String)> = Vec::new();
     for val in axis_ticks(g.xdata.0, g.xdata.1, g.xmin, g.xmax) {
-        let frac = (val - g.xmin) / (g.xmax - g.xmin);
-        let col = (frac * (plot_w as f64 - 1.0)).round();
-        if col.is_finite() && col >= 0.0 && (col as usize) < plot_w {
-            let c = col as usize;
+        let c = (px_of(val) / 2) as usize;
+        if c < plot_w {
             bar[c] = '┬';
             if xticks.last().map_or(true, |&(pc, _)| pc != c) {
                 xticks.push((c, format_axis(val)));
@@ -477,6 +472,42 @@ mod tests {
         assert!(g.cell_char(0, 0).is_none()); // far corner untouched
         let lit = (0..g.bits.len()).filter(|&i| g.bits[i] != 0).count();
         assert!(lit > lit0, "radius 4 should light more cells than radius 0");
+    }
+
+    #[test]
+    fn subpixel_maps_to_expected_cell() {
+        // A subpixel lands in cell (px/2, py/4). Axis tick labels reuse this
+        // same division to align with rendered point centers, so pin it here.
+        let mut g = BrailleGrid::new(6, 6);
+        g.plot_pixel(7, 13, 0); // cx = 7/2 = 3, cy = 13/4 = 3
+        assert!(g.cell_char(3, 3).is_some());
+        assert!(g.cell_char(0, 0).is_none());
+    }
+
+    #[test]
+    fn dots_land_on_tick_cells() {
+        // End-to-end: a point at a tick's value lights the exact cell that tick
+        // labels. Mirrors draw_graph's value -> subpixel -> cell mapping, so it
+        // breaks if the point and tick paths ever diverge.
+        let (plot_w, plot_h) = (40usize, 30usize);
+        let (xmin, xmax, ymin, ymax) = (-2.0f64, 102.0, -2.0, 102.0);
+        let pw = (plot_w * 2) as f64;
+        let ph = (plot_h * 4) as f64;
+        let px_of = |x: f64| ((x - xmin) / (xmax - xmin) * (pw - 1.0)) as u32;
+        let py_of = |y: f64| ((ymax - y) / (ymax - ymin) * (ph - 1.0)) as u32;
+
+        let quantiles = [0.0, 25.0, 50.0, 75.0, 100.0];
+        let mut grid = BrailleGrid::new(plot_w, plot_h);
+        for &v in &quantiles {
+            grid.plot_point(px_of(v), py_of(v), 0, DEFAULT_DOT_RADIUS);
+        }
+        for &v in &quantiles {
+            let (cx, cy) = ((px_of(v) / 2) as usize, (py_of(v) / 4) as usize);
+            assert!(
+                grid.cell_char(cx, cy).is_some(),
+                "no dot at tick cell ({cx},{cy}) for value {v}"
+            );
+        }
     }
 
     #[test]
