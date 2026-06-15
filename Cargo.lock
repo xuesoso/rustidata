@@ -1806,7 +1806,7 @@ dependencies = [
 
 [[package]]
 name = "rustidata"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "rustidata-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bzip2",
  "chrono",
@@ -1853,7 +1853,7 @@ dependencies = [
 
 [[package]]
 name = "rustidata-loaders"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arrow",
