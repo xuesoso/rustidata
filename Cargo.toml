@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/loaders", "crates/tui"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "GPL-3.0"
 repository = "https://github.com/xuesoso/rustidata"
@@ -29,7 +29,6 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 toml_edit = "0.22"
 dirs = "5"
-clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 rhai = { version = "1", features = ["sync"] }
 

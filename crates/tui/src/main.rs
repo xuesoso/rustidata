@@ -2,6 +2,7 @@
 
 mod app;
 mod canvas;
+mod cli;
 mod clipboard;
 mod cliptext;
 mod commands;
@@ -16,38 +17,24 @@ mod screen;
 mod statusbar;
 mod theme;
 
-use std::path::PathBuf;
-
-use clap::Parser;
 use rustidata_core::jobs::UiMsg;
 
-#[derive(Parser)]
-#[command(
-    name = "rustidata",
-    version,
-    about = "Explore tabular data in the terminal: csv/tsv/json/parquet/sqlite/xlsx,\nout-of-core for huge files, with visidata-style keybindings."
-)]
-struct Cli {
-    /// Files to open (- for stdin). Compressed (.gz/.bz2/.xz/.zst) files are
-    /// decompressed automatically; delimiters are sniffed.
-    files: Vec<PathBuf>,
-
-    /// Force a delimiter (e.g. ',' ';' 'tab')
-    #[arg(short, long)]
-    delimiter: Option<String>,
-
-    /// Start with a specific theme (default-dark, light, monochrome, ascii,
-    /// solarized-dark, gruvbox, gruvbox-light)
-    #[arg(short, long)]
-    theme: Option<String>,
-
-    /// Print the resolved config path and exit
-    #[arg(long)]
-    where_config: bool,
-}
-
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let cli = match cli::parse(std::env::args().skip(1)) {
+        Ok(cli::Parsed::Run(c)) => c,
+        Ok(cli::Parsed::Help) => {
+            print!("{}", cli::help());
+            return Ok(());
+        }
+        Ok(cli::Parsed::Version) => {
+            println!("rustidata {}", cli::VERSION);
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!("rustidata: {}", e);
+            std::process::exit(2);
+        }
+    };
 
     if cli.where_config {
         match config::config_path() {
