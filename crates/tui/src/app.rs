@@ -21,6 +21,7 @@ use crate::theme::{StyleKey, Theme};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum InputPurpose {
     EditCell,
+    EditPagerCell,
     EditCellsSelected,
     Search { backward: bool, all_cols: bool },
     SelectRegex { unselect: bool, all_cols: bool },
@@ -83,6 +84,8 @@ pub struct App {
     pub screen_width: u16,
     /// Graph payloads keyed by their placeholder sheet id.
     pub graphs: crate::canvas::GraphStore,
+    /// Cell-pager payloads keyed by their placeholder sheet id.
+    pub texts: crate::pager::TextStore,
 }
 
 impl App {
@@ -109,6 +112,7 @@ impl App {
                 nscreen: 25,
                 screen_width: 80,
                 graphs: Default::default(),
+                texts: Default::default(),
             },
             tx,
         )
@@ -288,7 +292,7 @@ impl App {
 fn history_key(purpose: InputPurpose) -> &'static str {
     use InputPurpose::*;
     match purpose {
-        EditCell | EditCellsSelected => "edit",
+        EditCell | EditPagerCell | EditCellsSelected => "edit",
         Search { .. } => "search",
         SelectRegex { .. } => "select",
         SelectExpr { .. } | AddExprColumn => "expr",
@@ -405,6 +409,10 @@ fn draw_all(app: &mut App, sb: &mut ScreenBuffer) {
             if let Some(g) = app.graphs.get(&sheet.id) {
                 crate::canvas::draw_graph(sb, &theme, g, sheet.id, table_y, table_h);
             }
+        } else if sheet.kind == rustidata_core::sheet::SheetKind::Text {
+            if let Some(tv) = app.texts.get_mut(&sheet.id) {
+                crate::pager::draw_text_pager(sb, &theme, tv, table_y, table_h);
+            }
         } else {
             crate::draw_sheet::draw(sb, sheet, &opts, &theme, table_y, table_h);
         }
@@ -468,8 +476,11 @@ fn handle_key(app: &mut App, ks: &str) {
 }
 
 fn handle_normal_key(app: &mut App, ks: &str) {
-    // graph sheets capture pan/zoom keys first
+    // graph / pager sheets capture their navigation keys first
     if app.prefix.is_empty() && crate::canvas::handle_graph_key(app, ks) {
+        return;
+    }
+    if app.prefix.is_empty() && crate::pager::handle_text_key(app, ks) {
         return;
     }
     // prefix accumulation: only g, z, gz are prefixes — anything else

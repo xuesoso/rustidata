@@ -3,7 +3,7 @@
 //! overlay and current sort order.
 
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 use rustidata_core::sheet::Sheet;
@@ -14,14 +14,37 @@ pub fn save(sheet: &Sheet, path: &Path) -> Result<()> {
         .extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_ascii_lowercase());
-    match ext.as_deref() {
-        Some("csv") => save_delim(sheet, path, b','),
-        Some("tsv") => save_delim(sheet, path, b'\t'),
-        Some("json") => save_json(sheet, path),
-        Some("jsonl") | Some("ndjson") => save_jsonl(sheet, path),
-        Some("md") | Some("markdown") => save_markdown(sheet, path),
+    // Write to a sibling temp file and atomically rename it into place, rather
+    // than truncating `path` directly. Saving over the sheet's own source file
+    // would otherwise truncate the file it is memory-mapped from, invalidating
+    // the mapping and crashing the process with SIGBUS on the next row read.
+    let tmp = temp_path(path);
+    let write = |p: &Path| match ext.as_deref() {
+        Some("csv") => save_delim(sheet, p, b','),
+        Some("tsv") => save_delim(sheet, p, b'\t'),
+        Some("json") => save_json(sheet, p),
+        Some("jsonl") | Some("ndjson") => save_jsonl(sheet, p),
+        Some("md") | Some("markdown") => save_markdown(sheet, p),
         other => bail!("unsupported save format: {:?}", other.unwrap_or("none")),
+    };
+    match write(&tmp) {
+        Ok(()) => Ok(std::fs::rename(&tmp, path)?),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp); // best-effort cleanup
+            Err(e)
+        }
     }
+}
+
+/// A temp path beside `path` (same directory, so `rename` stays on one
+/// filesystem and is atomic). The pid keeps concurrent instances from clashing.
+fn temp_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from("out"));
+    name.push(format!(".rustidata-tmp.{}", std::process::id()));
+    path.with_file_name(name)
 }
 
 fn visible_headers(sheet: &Sheet) -> Vec<String> {
@@ -150,6 +173,23 @@ mod tests {
         save(&sheet(), &p).unwrap();
         let content = std::fs::read_to_string(&p).unwrap();
         assert_eq!(content, "k,v\na,1\nb,2\n");
+    }
+
+    #[test]
+    fn overwrites_existing_file_atomically() {
+        // Saving onto an existing path replaces it via temp+rename, and leaves
+        // no temp file behind.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("out.csv");
+        std::fs::write(&p, "stale pre-existing content").unwrap();
+        save(&sheet(), &p).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "k,v\na,1\nb,2\n");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("rustidata-tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp file left behind: {:?}", leftovers);
     }
 
     #[test]

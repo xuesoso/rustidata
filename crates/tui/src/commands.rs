@@ -102,6 +102,7 @@ pub static BINDINGS: &[(&str, &str, &str)] = &[
     ("z?", "help-commands", "open command help"),
     ("F1", "help-commands", "open command help"),
     ("Enter", "open-row", "dive into current row"),
+    ("zEnter", "view-cell", "view current cell value in a scrollable pager"),
     ("^R", "reload-sheet", "reload sheet from source"),
     ("o", "open-file", "open a file"),
     ("^S", "save-sheet", "save sheet to file"),
@@ -573,6 +574,7 @@ pub fn execute(app: &mut App, longname: &str) -> Result<()> {
             app.push_sheet(s);
         }
         "open-row" => open_row(app)?,
+        "view-cell" => crate::pager::open_cell_pager(app)?,
         "reload-sheet" => reload_sheet(app)?,
         "open-file" => app.start_input(InputPurpose::OpenFile, "open: ", "", vec![]),
         "save-sheet" => {
@@ -944,6 +946,14 @@ fn open_row(app: &mut App) -> Result<()> {
             let sub = transform::subset_sheet(parent, name, ids);
             app.push_sheet(sub);
         }
+        SheetKind::Table
+        | SheetKind::Describe
+        | SheetKind::Join
+        | SheetKind::Transpose
+        | SheetKind::Columns
+        | SheetKind::Options => open_row_detail(app)?,
+        // inside a row-detail, Enter opens the focused value in the pager
+        SheetKind::RowDetail => crate::pager::open_cell_pager(app)?,
         SheetKind::Dir => open_dir_entry(app)?,
         SheetKind::Sheets => {
             // jump to the sheet named in the current row
@@ -960,6 +970,18 @@ fn open_row(app: &mut App) -> Result<()> {
         }
         _ => app.info("nothing to dive into"),
     }
+    Ok(())
+}
+
+/// Expand the cursor row into a `column`/`value` detail sheet (q to return).
+fn open_row_detail(app: &mut App) -> Result<()> {
+    let Some(s) = app.sheet() else { return Ok(()) };
+    let Some(rid) = s.cursor_rowid() else {
+        app.info("no row under cursor");
+        return Ok(());
+    };
+    let detail = transform::row_detail::row_detail(s, rid);
+    app.push_sheet(detail);
     Ok(())
 }
 
@@ -1016,6 +1038,33 @@ fn reload_sheet(app: &mut App) -> Result<()> {
 pub fn finish_input(app: &mut App, purpose: InputPurpose, text: &str) -> Result<()> {
     match purpose {
         InputPurpose::EditCell => app.set_cell_text(text),
+        InputPurpose::EditPagerCell => {
+            // Apply the edit to the cell the pager was opened from, then refresh
+            // the displayed value from the (now-updated) source cell.
+            let Some(top_id) = app.sheets.last().map(|s| s.id) else { return Ok(()) };
+            let Some((sid, rid, ci)) = app
+                .texts
+                .get(&top_id)
+                .map(|t| (t.src_sheet, t.src_rid, t.src_ci))
+            else {
+                return Ok(());
+            };
+            let new = if text.is_empty() {
+                Value::Null
+            } else {
+                Value::Str(text.into())
+            };
+            let Some(src) = app.sheets.iter_mut().find(|s| s.id == sid) else {
+                bail!("source sheet is no longer open");
+            };
+            crate::app::set_column_cell(src, ci, rid, new).map_err(|e| anyhow!(e))?;
+            let refreshed = src.columns[ci].display_value(src, rid).to_string();
+            if let Some(tv) = app.texts.get_mut(&top_id) {
+                tv.body = refreshed;
+                tv.scroll = 0;
+            }
+            app.dirty = true;
+        }
         InputPurpose::EditCellsSelected => {
             let Some(s) = app.sheets.last_mut() else { return Ok(()) };
             let Some(ci) = s.cursor_col_index() else { return Ok(()) };
@@ -1148,6 +1197,10 @@ pub fn finish_input(app: &mut App, purpose: InputPurpose, text: &str) -> Result<
             } else {
                 rustidata_loaders::save::save(s, &path)?;
             }
+            // The atomic save keeps the live mapping valid, so the view stays as
+            // it was (and already shows what was written) — no reload needed,
+            // which is what preserves cursor/sort/selection/types. `^R` still
+            // does an explicit re-read.
             app.info(format!("saved to {}", text));
         }
         InputPurpose::ResizeColumn => {

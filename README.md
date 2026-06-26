@@ -55,7 +55,8 @@ Movement: `hjkl`/arrows, `g`-prefixed for far edges, `PgUp`/`PgDn`, `zr` go-to-r
 | `.` | braille scatter plot (`hjkl` pan, `+`/`-` zoom, `,`/`.` dot size, `0` reset) |
 | `U` / `R` | undo / redo |
 | `S` `C` `O` | sheets / columns / options metasheets |
-| `Enter` | dive: freq group → source rows, dir entry → file, db → table |
+| `Enter` | dive: row → detail (column/value), freq group → source rows, dir entry → file, db → table |
+| `z Enter` | view current cell's full value in a scrollable, word-wrapped pager (`e` edit, `q` close) |
 | `^S` | save (csv/tsv/json/jsonl/md/sqlite by extension) |
 | `Space` | run any command by name |
 | `F8` / `F9` | choose theme (live preview) / cycle theme |
@@ -98,7 +99,7 @@ preserving comments.
 - `crates/tui` — the binary
 
 ```
-cargo test --workspace            # 122 tests
+cargo test --workspace            # 126 tests
 scripts/bench_vs_visidata.sh     # generate data, benchmark both tools
 ```
 

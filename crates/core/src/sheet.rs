@@ -25,6 +25,7 @@ pub enum SheetKind {
     Join,
     Transpose,
     Unfurl,
+    RowDetail,
     Graph,
     Text,
     Dir,

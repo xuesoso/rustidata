@@ -11,6 +11,7 @@ mod input;
 mod keys;
 mod menu;
 mod metasheets;
+mod pager;
 mod screen;
 mod statusbar;
 mod theme;

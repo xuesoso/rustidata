@@ -11,6 +11,7 @@ pub mod freq;
 pub mod join;
 pub mod melt;
 pub mod pivot;
+pub mod row_detail;
 pub mod transpose;
 pub mod unfurl;
 

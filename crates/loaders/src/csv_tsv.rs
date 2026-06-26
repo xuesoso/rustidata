@@ -188,6 +188,26 @@ mod tests {
     }
 
     #[test]
+    fn save_over_mmapped_source_does_not_crash() {
+        // Regression: overwriting the file a sheet is mmap-reading used to
+        // truncate it mid-read and crash the process with SIGBUS. The atomic
+        // temp+rename save keeps the live mapping valid.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("data.csv");
+        std::fs::write(&p, "k,v\na,1\nb,2\n").unwrap();
+
+        let sheet = load_mmap(&p, &Options::default(), Arc::new(|| {})).unwrap();
+        wait_loaded(&sheet);
+        assert_eq!(sheet.nrows(), 2);
+
+        // overwrite the very file we are mmap-reading
+        crate::save::save(&sheet, &p).unwrap();
+
+        // the mapping stayed valid and the file holds the saved content
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "k,v\na,1\nb,2\n");
+    }
+
+    #[test]
     fn gzip_streaming() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("t.csv.gz");

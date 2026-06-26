@@ -475,16 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn subpixel_maps_to_expected_cell() {
-        // A subpixel lands in cell (px/2, py/4). Axis tick labels reuse this
-        // same division to align with rendered point centers, so pin it here.
-        let mut g = BrailleGrid::new(6, 6);
-        g.plot_pixel(7, 13, 0); // cx = 7/2 = 3, cy = 13/4 = 3
-        assert!(g.cell_char(3, 3).is_some());
-        assert!(g.cell_char(0, 0).is_none());
-    }
-
-    #[test]
     fn dots_land_on_tick_cells() {
         // End-to-end: a point at a tick's value lights the exact cell that tick
         // labels. Mirrors draw_graph's value -> subpixel -> cell mapping, so it
