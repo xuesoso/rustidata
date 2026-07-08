@@ -85,7 +85,7 @@ pub fn max_col_width(sheet: &Sheet, ci: usize, nscreen: u64, cap: u16) -> u16 {
     (w as u16).clamp(MIN_COL_WIDTH, cap)
 }
 
-/// Scroll left_col so the cursor column is on screen.
+/// Scroll left_col so the cursor column is on screen at its full width.
 pub fn ensure_cursor_col_visible(sheet: &mut Sheet, opts: &Options, width: u16, nscreen: u64) {
     let nkeys = sheet.n_key_cols();
     if sheet.view.cur_col < nkeys {
@@ -96,9 +96,18 @@ pub fn ensure_cursor_col_visible(sheet: &mut Sheet, opts: &Options, width: u16, 
         sheet.view.left_col = rest_idx;
         return;
     }
+    // Scroll until the cursor column renders at its full width, not merely
+    // appears: calc_layout clamps a rightmost column to the space before the
+    // screen edge, so widening it (`>`/`_`) must pull left_col forward to make
+    // room. Once the column is leftmost, more scrolling cannot widen it.
+    let Some(ci) = sheet.cursor_col_index() else { return };
+    let desired = col_width(sheet, opts, ci, nscreen);
     for _ in 0..256 {
         let layout = calc_layout(sheet, opts, width, nscreen);
-        if layout.iter().any(|l| l.vis_idx == sheet.view.cur_col) {
+        if layout
+            .iter()
+            .any(|l| l.vis_idx == sheet.view.cur_col && l.w >= desired)
+        {
             return;
         }
         if sheet.view.left_col >= rest_idx {
@@ -246,6 +255,47 @@ mod tests {
         assert!(text.contains("name"), "got: {}", text);
         assert!(text.contains("alice"));
         assert!(text.contains("30"));
+    }
+
+    #[test]
+    fn rightmost_column_expands_to_full_width() {
+        // Regression: with the cursor on the rightmost column, widening it
+        // must scroll left_col so the column gets its full requested width
+        // instead of staying clamped at the screen edge.
+        let store = ColumnarStore::from_rows(
+            3,
+            vec![vec![Value::Int(1), Value::Int(2), Value::Int(3)]],
+        );
+        let mut s = Sheet::new(
+            "t",
+            Arc::new(store),
+            vec![
+                Column::source("a", 0),
+                Column::source("b", 1),
+                Column::source("c", 2),
+            ],
+        );
+        s.columns[0].width = Some(8);
+        s.columns[1].width = Some(8);
+        s.columns[2].width = Some(20); // wider than the space left at its x
+        s.view.cur_col = 2;
+        let opts = Options::default();
+
+        // before scrolling, layout clamps c below its requested width
+        let clamped = calc_layout(&s, &opts, 30, 5)
+            .iter()
+            .find(|l| l.vis_idx == 2)
+            .map(|l| l.w)
+            .unwrap_or(0);
+        assert!(clamped < 20, "test premise: c starts clamped, got {clamped}");
+
+        ensure_cursor_col_visible(&mut s, &opts, 30, 5);
+        let layout = calc_layout(&s, &opts, 30, 5);
+        let c = layout
+            .iter()
+            .find(|l| l.vis_idx == 2)
+            .expect("cursor column on screen");
+        assert_eq!(c.w, 20, "rightmost column should render at full width");
     }
 
     #[test]
