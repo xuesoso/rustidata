@@ -59,12 +59,32 @@ pub fn calc_layout(sheet: &Sheet, opts: &Options, width: u16, nscreen: u64) -> V
 }
 
 /// Width the column currently renders at (explicit width, or auto-fit sample).
+/// Auto-fit widths are cached on the sheet: sampling re-formats a screenful of
+/// values, and calc_layout asks for every column on every redraw.
 pub fn col_width(sheet: &Sheet, opts: &Options, ci: usize, nscreen: u64) -> u16 {
     let col = &sheet.columns[ci];
     if let Some(w) = col.width {
         return w.max(MIN_COL_WIDTH);
     }
-    max_col_width(sheet, ci, nscreen, opts.max_width)
+    let key: rustidata_core::sheet::WidthCacheKey = (
+        sheet.view.top_row,
+        nscreen,
+        opts.max_width,
+        sheet.nrows(),
+        sheet.overlay.version(),
+        sheet.perm.as_ref().map_or(0, |p| std::sync::Arc::as_ptr(p) as usize),
+        col.vtype,
+        dispwidth(&col.header_text()),
+        col.fmtstr.as_ref().map_or(0, |s| s.len()),
+    );
+    if let Some((k, w)) = sheet.width_cache.lock().get(&ci) {
+        if *k == key {
+            return *w;
+        }
+    }
+    let w = max_col_width(sheet, ci, nscreen, opts.max_width);
+    sheet.width_cache.lock().insert(ci, (key, w));
+    w
 }
 
 /// Max display width of the header and visible-row values for column `ci`,
@@ -255,6 +275,28 @@ mod tests {
         assert!(text.contains("name"), "got: {}", text);
         assert!(text.contains("alice"));
         assert!(text.contains("30"));
+    }
+
+    #[test]
+    fn width_cache_invalidates_on_edit_and_scroll() {
+        let mut s = sheet(); // auto-width columns (no explicit width)
+        let opts = Options::default();
+        let w0 = col_width(&s, &opts, 0, 5);
+        assert_eq!(col_width(&s, &opts, 0, 5), w0); // cached, stable
+
+        // editing a cell to a longer value must widen the auto-fit
+        s.overlay.set_cell(
+            0,
+            0,
+            Value::Str("a-much-longer-name-than-before".into()),
+        );
+        let w1 = col_width(&s, &opts, 0, 5);
+        assert!(w1 > w0, "edit should invalidate cached width ({w0} -> {w1})");
+
+        // scrolling changes the sampled window -> key changes, no stale hit
+        s.view.top_row = 1;
+        let w2 = col_width(&s, &opts, 0, 5);
+        assert!(w2 <= w1); // row 0 (the long value) scrolled out of the sample
     }
 
     #[test]

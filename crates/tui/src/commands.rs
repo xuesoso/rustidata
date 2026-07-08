@@ -491,9 +491,8 @@ pub fn execute(app: &mut App, longname: &str) -> Result<()> {
         "copy-selected" => {
             let s = sheet_or_return!(app);
             let rows: Vec<Vec<Value>> = s
-                .selected_or_all()
-                .iter()
-                .map(|&rid| realize_row(s, rid))
+                .selected_or_all_iter()
+                .map(|rid| realize_row(s, rid))
                 .collect();
             let n = rows.len();
             app.clipboard.copy_rows(rows);
@@ -1237,6 +1236,11 @@ fn shellexpand_home(s: &str) -> String {
     s.to_string()
 }
 
+/// Sheets up to this many rows are searched synchronously (fast enough to be
+/// imperceptible); larger sheets search on a background job so a cold scan of
+/// a multi-GB file cannot freeze the UI, and a newer search cancels the old.
+const SYNC_SEARCH_ROWS: u64 = 100_000;
+
 fn do_search(app: &mut App, backward: bool) -> Result<()> {
     let Some((re, all_cols, _)) = app.last_search.clone() else {
         bail!("no search pattern")
@@ -1247,12 +1251,30 @@ fn do_search(app: &mut App, backward: bool) -> Result<()> {
         rustidata_core::search::SearchScope::CursorCol
     };
     let Some(s) = app.sheets.last_mut() else { return Ok(()) };
-    match rustidata_core::search::search(s, &re, scope, s.view.cur_row, backward) {
-        Some(vi) => {
-            s.view.cur_row = vi;
+
+    if s.nrows() <= SYNC_SEARCH_ROWS {
+        let cancel = CancelToken::new();
+        match rustidata_core::search::search(s, &re, scope, s.view.cur_row, backward, &cancel) {
+            Some(vi) => s.view.cur_row = vi,
+            None => app.status(Severity::Warning, "no match"),
         }
-        None => app.status(Severity::Warning, "no match"),
+        return Ok(());
     }
+
+    let snapshot = s.job_snapshot();
+    let sheet_id = s.id;
+    let from = s.view.cur_row;
+    app.jobs.cancel_named("search"); // supersede any in-flight search
+    app.jobs.spawn("search", move |cancel, tx| {
+        let vi = rustidata_core::search::search(&snapshot, &re, scope, from, backward, &cancel);
+        if !cancel.is_cancelled() {
+            let _ = tx.send(UiMsg::SearchDone {
+                sheet: sheet_id,
+                view_idx: vi,
+            });
+        }
+    });
+    app.info("searching…");
     Ok(())
 }
 

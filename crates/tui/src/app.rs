@@ -246,6 +246,21 @@ impl App {
                 UiMsg::SheetReady(sheet) => {
                     self.push_sheet(*sheet);
                 }
+                UiMsg::SearchDone { sheet, view_idx } => {
+                    // only applies if the searched sheet is still on top
+                    if self.sheets.last().is_some_and(|s| s.id == sheet) {
+                        match view_idx {
+                            Some(vi) => {
+                                if let Some(s) = self.sheets.last_mut() {
+                                    s.view.cur_row = vi;
+                                }
+                                self.status_msg = None;
+                            }
+                            None => self.status(Severity::Warning, "no match"),
+                        }
+                        self.dirty = true;
+                    }
+                }
                 UiMsg::Status(sev, msg) => self.status(sev, msg),
                 UiMsg::JobFinished { name } => {
                     self.jobs.reap(&name);
@@ -335,15 +350,55 @@ pub fn set_column_cell(
     }
 }
 
+/// Best-effort terminal restore: safe to call twice, and from a panic hook.
+fn restore_terminal() {
+    let mut stdout = std::io::stdout();
+    let _ = execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen);
+    let _ = terminal::disable_raw_mode();
+}
+
+/// Restores the terminal on drop, so an early return or unwind cannot leave
+/// the user's shell in raw mode inside the alternate screen.
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn enter() -> Result<Self> {
+        terminal::enable_raw_mode()?;
+        execute!(std::io::stdout(), terminal::EnterAlternateScreen, cursor::Hide)?;
+        Ok(TerminalGuard)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        restore_terminal();
+    }
+}
+
+#[cfg(test)]
+mod terminal_guard_tests {
+    // restore_terminal must be safe to call repeatedly and without a tty:
+    // the panic hook and the guard's Drop both call it, in either order.
+    #[test]
+    fn restore_is_idempotent_without_tty() {
+        super::restore_terminal();
+        super::restore_terminal();
+    }
+}
+
 /// Run the TUI until quit.
 pub fn run(app: &mut App) -> Result<()> {
+    // Restore the terminal before the panic message prints; the guard's Drop
+    // (which runs later, during unwind) is then a harmless no-op repeat.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        default_hook(info);
+    }));
+
+    let _guard = TerminalGuard::enter()?;
     let mut stdout = std::io::stdout();
-    terminal::enable_raw_mode()?;
-    execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
-    let result = mainloop(app, &mut stdout);
-    execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen)?;
-    terminal::disable_raw_mode()?;
-    result
+    mainloop(app, &mut stdout)
 }
 
 fn mainloop(app: &mut App, out: &mut impl Write) -> Result<()> {
@@ -362,7 +417,14 @@ fn mainloop(app: &mut App, out: &mut impl Write) -> Result<()> {
             app.dirty = false;
         }
 
-        if event::poll(Duration::from_millis(100))? {
+        // Background threads (jobs, loaders) deliver results over the channel,
+        // which poll() cannot wake on — so poll fast while any are running.
+        // Fully idle, only terminal events matter: poll slowly to avoid waking
+        // 10x/s for nothing (battery).
+        let busy = app.jobs.n_active() > 0
+            || app.sheets.iter().any(|s| s.loading().is_some());
+        let timeout = Duration::from_millis(if busy { 50 } else { 1000 });
+        if event::poll(timeout)? {
             match event::read()? {
                 Event::Key(kev) if kev.kind != KeyEventKind::Release => {
                     app.status_msg = None;

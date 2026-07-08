@@ -21,24 +21,30 @@ pub fn sort_permutation(
     if cancel.is_cancelled() {
         return None;
     }
+    if spec.is_empty() {
+        return Some(Arc::new(ids));
+    }
 
-    // Materialize sort keys once per row (typed values), in parallel.
-    let keys: Vec<Vec<Value>> = ids
-        .par_iter()
-        .map(|&rid| {
-            spec.iter()
-                .map(|&(col, _)| sheet.columns[col].typed_value(sheet, rid))
-                .collect()
-        })
-        .collect();
+    // Materialize sort keys once per row (typed values), in parallel, into a
+    // single flat buffer (row i's keys at [i*stride, (i+1)*stride)) — one
+    // allocation total instead of one Vec per row.
+    let stride = spec.len();
+    let mut keys: Vec<Value> = vec![Value::Null; ids.len() * stride];
+    keys.par_chunks_mut(stride)
+        .zip(ids.par_iter())
+        .for_each(|(out, &rid)| {
+            for (k, &(col, _)) in spec.iter().enumerate() {
+                out[k] = sheet.columns[col].typed_value(sheet, rid);
+            }
+        });
     if cancel.is_cancelled() {
         return None;
     }
 
     let mut order: Vec<u32> = (0..ids.len() as u32).collect();
     order.par_sort_by(|&a, &b| {
-        let ka = &keys[a as usize];
-        let kb = &keys[b as usize];
+        let ka = &keys[a as usize * stride..][..stride];
+        let kb = &keys[b as usize * stride..][..stride];
         for (i, &(_, desc)) in spec.iter().enumerate() {
             let ord = value_cmp(&ka[i], &kb[i]);
             let ord = if desc { ord.reverse() } else { ord };

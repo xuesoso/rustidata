@@ -220,7 +220,7 @@ pub fn open_graph(app: &mut App) -> Result<(), anyhow::Error> {
         .find(|&i| s.columns[i].vtype.is_numeric() || s.columns[i].vtype == rustidata_core::value::VType::Date);
 
     let mut points = Vec::new();
-    for (i, rid) in s.selected_or_all().into_iter().enumerate() {
+    for (i, rid) in s.selected_or_all_iter().enumerate() {
         let y = match s.columns[yci].typed_value(s, rid).as_f64() {
             Some(v) => v,
             None => continue,

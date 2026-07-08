@@ -337,15 +337,18 @@ fn next_row_start(data: &[u8], from: usize, quote_aware: bool, quote: Option<u8>
     let q = quote.unwrap_or(b'"');
     let mut in_quotes = false;
     let mut i = from;
-    while i < data.len() {
-        let b = data[i];
-        if b == q {
+    // memchr2 jumps between the only bytes that matter (quote / newline)
+    // instead of walking every byte; this loop is the indexing hot path for
+    // quoted files.
+    while let Some(off) = memchr::memchr2(q, b'\n', &data[i..]) {
+        let j = i + off;
+        if data[j] == q {
             in_quotes = !in_quotes;
-        } else if b == b'\n' && !in_quotes {
-            let next = i + 1;
+        } else if !in_quotes {
+            let next = j + 1;
             return (next < data.len()).then_some(next);
         }
-        i += 1;
+        i = j + 1;
     }
     None
 }
@@ -450,6 +453,24 @@ mod tests {
         let s = store_from("x\ty\n1\t2\n");
         assert_eq!(s.dialect.delimiter, b'\t');
         assert_eq!(s.raw(0, 1).as_str(), Some("2"));
+    }
+
+    #[test]
+    fn quote_state_machine_across_many_rows() {
+        // mixed quoted/unquoted rows, quoted newlines, doubled quotes, and a
+        // quoted field ending the file — pins the memchr2 state machine
+        let s = store_from(
+            "a,b\n\
+             \"x\ny\nz\",1\n\
+             plain,2\n\
+             \"say \"\"hi\"\"\n bye\",3\n\
+             last,\"tail\"\n",
+        );
+        assert_eq!(s.len(), 4);
+        assert_eq!(s.raw(0, 0).as_str(), Some("x\ny\nz"));
+        assert_eq!(s.raw(1, 0).as_str(), Some("plain"));
+        assert_eq!(s.raw(2, 1).as_str(), Some("3"));
+        assert_eq!(s.raw(3, 1).as_str(), Some("tail"));
     }
 
     #[test]

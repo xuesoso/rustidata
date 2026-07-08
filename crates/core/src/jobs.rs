@@ -51,6 +51,11 @@ pub enum UiMsg {
     },
     /// A derived sheet is ready to push.
     SheetReady(Box<crate::sheet::Sheet>),
+    /// A background search finished: move the cursor (None = no match).
+    SearchDone {
+        sheet: SheetId,
+        view_idx: Option<u64>,
+    },
     Status(Severity, String),
     JobFinished { name: String },
 }
@@ -98,6 +103,15 @@ impl JobManager {
     pub fn cancel_all(&self) {
         for (_, tok) in self.jobs.lock().iter() {
             tok.cancel();
+        }
+    }
+
+    /// Cancel outstanding jobs with the given name (e.g. supersede a search).
+    pub fn cancel_named(&self, name: &str) {
+        for (n, tok) in self.jobs.lock().iter() {
+            if n == name {
+                tok.cancel();
+            }
         }
     }
 

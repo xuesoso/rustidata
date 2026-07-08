@@ -21,6 +21,8 @@ pub struct Overlay {
     pub deleted: RoaringTreemap,
     /// Inserted rows, indexed by (rowid - INSERT_BASE).
     inserted: Vec<Vec<Value>>,
+    /// Bumped on every mutation; a cheap invalidation key for display caches.
+    version: u64,
 }
 
 impl Overlay {
@@ -32,7 +34,13 @@ impl Overlay {
         row >= INSERT_BASE
     }
 
+    /// Monotonic mutation counter (any edit/insert/delete/undelete bumps it).
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
     pub fn set_cell(&mut self, row: RowId, col: usize, v: Value) -> Option<Value> {
+        self.version += 1;
         if let Some(idx) = row.checked_sub(INSERT_BASE) {
             let r = self.inserted.get_mut(idx as usize)?;
             if col >= r.len() {
@@ -46,14 +54,17 @@ impl Overlay {
 
     /// Remove an edit, restoring the underlying source value (undo support).
     pub fn clear_cell(&mut self, row: RowId, col: usize) {
+        self.version += 1;
         self.edits.remove(&(row, col));
     }
 
     pub fn delete_row(&mut self, row: RowId) {
+        self.version += 1;
         self.deleted.insert(row);
     }
 
     pub fn undelete_row(&mut self, row: RowId) {
+        self.version += 1;
         self.deleted.remove(row);
     }
 
@@ -63,6 +74,7 @@ impl Overlay {
 
     /// Insert a new row, returning its RowId.
     pub fn insert_row(&mut self, values: Vec<Value>) -> RowId {
+        self.version += 1;
         let id = INSERT_BASE + self.inserted.len() as RowId;
         self.inserted.push(values);
         id
@@ -101,6 +113,7 @@ impl Overlay {
             edits: self.edits.clone(),
             deleted: self.deleted.clone(),
             inserted: self.inserted.clone(),
+            version: self.version,
         }
     }
 }

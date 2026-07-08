@@ -10,13 +10,18 @@ env:
 
 jobs:
   test:
-    name: Test suite
-    runs-on: ubuntu-latest
+    name: Test suite (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       # arboard (clipboard) links against X11/xcb on Linux
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \

@@ -80,7 +80,16 @@ pub struct Sheet {
     pub groups: Option<Arc<Vec<Vec<RowId>>>>,
     /// Path this sheet was loaded from (for save/reload).
     pub source_path: Option<std::path::PathBuf>,
+    /// Cached auto-fit column widths: col index -> (inputs key, width). The
+    /// display layer compares the key to decide validity; a Mutex (not a
+    /// RefCell) because sheets are shared across rayon workers during sort.
+    pub width_cache: parking_lot::Mutex<std::collections::HashMap<usize, (WidthCacheKey, u16)>>,
 }
+
+/// Everything an auto-fit column width depends on: (top_row, nscreen, cap,
+/// nrows, overlay version, perm identity, column type, header display length,
+/// format string length).
+pub type WidthCacheKey = (u64, u64, u16, u64, u64, usize, crate::value::VType, usize, usize);
 
 impl Sheet {
     pub fn new(
@@ -103,6 +112,7 @@ impl Sheet {
             parent: None,
             groups: None,
             source_path: None,
+            width_cache: Default::default(),
         }
     }
 
@@ -313,13 +323,22 @@ impl Sheet {
 
     /// Selected RowIds in view order (or all rows if none selected) —
     /// visidata's "selected rows or whole sheet" convention for transforms.
+    /// Prefer `selected_or_all_iter` for single-pass consumers: this variant
+    /// materializes the whole id list (8 bytes/row on a big sheet).
     pub fn selected_or_all(&self) -> Vec<RowId> {
+        self.selected_or_all_iter().collect()
+    }
+
+    /// Streaming version of `selected_or_all` for consumers that only iterate
+    /// once (graphs, savers): no allocation proportional to the sheet.
+    pub fn selected_or_all_iter(&self) -> Box<dyn Iterator<Item = RowId> + '_> {
         if self.selection.is_empty() {
-            self.iter_rowids().collect()
-        } else {
             self.iter_rowids()
-                .filter(|r| self.selection.contains(*r))
-                .collect()
+        } else {
+            Box::new(
+                self.iter_rowids()
+                    .filter(|r| self.selection.contains(*r)),
+            )
         }
     }
 
@@ -341,6 +360,7 @@ impl Sheet {
             parent: self.parent,
             groups: self.groups.clone(),
             source_path: self.source_path.clone(),
+            width_cache: Default::default(),
         }
     }
 

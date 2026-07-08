@@ -99,7 +99,7 @@ preserving comments.
 - `crates/tui` — the binary
 
 ```
-cargo test --workspace            # 133 tests
+cargo test --workspace            # 138 tests
 scripts/bench_vs_visidata.sh     # generate data, benchmark both tools
 ```
 

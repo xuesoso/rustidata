@@ -2,7 +2,11 @@
 
 use regex::Regex;
 
+use crate::jobs::CancelToken;
 use crate::sheet::Sheet;
+
+/// Rows scanned between cancellation checks.
+const CANCEL_STRIDE: u64 = 4096;
 
 /// Where to search: the cursor column or all visible columns.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -12,12 +16,15 @@ pub enum SearchScope {
 }
 
 /// Find the next view index (after `from`, wrapping) whose row matches.
+/// Checks `cancel` periodically so a scan over a huge sheet can be aborted
+/// (a cancelled search returns None).
 pub fn search(
     sheet: &Sheet,
     re: &Regex,
     scope: SearchScope,
     from: u64,
     backward: bool,
+    cancel: &CancelToken,
 ) -> Option<u64> {
     let n = sheet.nrows();
     if n == 0 {
@@ -32,7 +39,10 @@ pub fn search(
     } else {
         Box::new((1..n).map(move |i| (from + i) % n))
     };
-    for vi in step_iter {
+    for (scanned, vi) in step_iter.enumerate() {
+        if scanned as u64 % CANCEL_STRIDE == 0 && cancel.is_cancelled() {
+            return None;
+        }
         if row_matches(sheet, vi, &cols, re) {
             return Some(vi);
         }
@@ -99,15 +109,26 @@ mod tests {
     fn forward_wrap() {
         let s = sheet();
         let re = Regex::new("^ap").unwrap();
-        assert_eq!(search(&s, &re, SearchScope::AllCols, 0, false), Some(3));
-        assert_eq!(search(&s, &re, SearchScope::AllCols, 3, false), Some(0));
+        let c = CancelToken::new();
+        assert_eq!(search(&s, &re, SearchScope::AllCols, 0, false, &c), Some(3));
+        assert_eq!(search(&s, &re, SearchScope::AllCols, 3, false, &c), Some(0));
     }
 
     #[test]
     fn backward() {
         let s = sheet();
         let re = Regex::new("^ap").unwrap();
-        assert_eq!(search(&s, &re, SearchScope::AllCols, 0, true), Some(3));
+        let c = CancelToken::new();
+        assert_eq!(search(&s, &re, SearchScope::AllCols, 0, true, &c), Some(3));
+    }
+
+    #[test]
+    fn cancelled_search_returns_none() {
+        let s = sheet();
+        let re = Regex::new("^ap").unwrap();
+        let c = CancelToken::new();
+        c.cancel();
+        assert_eq!(search(&s, &re, SearchScope::AllCols, 0, false, &c), None);
     }
 
     #[test]
