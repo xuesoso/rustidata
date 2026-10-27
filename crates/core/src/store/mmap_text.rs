@@ -157,7 +157,13 @@ impl MmapTextStore {
         let quote_aware = self.dialect.uses_quotes;
         while (starts.len() < max_rows) && (pos as usize) < data.len() {
             starts.push(pos);
-            pos = match next_row_start(data, pos as usize, quote_aware, self.dialect.quote) {
+            pos = match next_row_start(
+                data,
+                pos as usize,
+                quote_aware,
+                self.dialect.quote,
+                self.dialect.delimiter,
+            ) {
                 Some(p) => p as u64,
                 None => {
                     self.finish_index(&mut starts, data.len() as u64);
@@ -197,7 +203,13 @@ impl MmapTextStore {
             }
             match starts.last() {
                 Some(&last) => {
-                    match next_row_start(data, last as usize, quote_aware, self.dialect.quote) {
+                    match next_row_start(
+                        data,
+                        last as usize,
+                        quote_aware,
+                        self.dialect.quote,
+                        self.dialect.delimiter,
+                    ) {
                         Some(p) => p as u64,
                         None => {
                             drop(starts);
@@ -221,7 +233,13 @@ impl MmapTextStore {
             // collect a batch without holding the lock
             while batch.len() < 64 * 1024 && (pos as usize) < data.len() {
                 batch.push(pos);
-                pos = match next_row_start(data, pos as usize, quote_aware, self.dialect.quote) {
+                pos = match next_row_start(
+                    data,
+                    pos as usize,
+                    quote_aware,
+                    self.dialect.quote,
+                    self.dialect.delimiter,
+                ) {
                     Some(p) => p as u64,
                     None => data_len,
                 };
@@ -327,8 +345,16 @@ impl RowSource for MmapTextStore {
 
 /// Find the byte offset of the next row start after the row beginning at
 /// `from`. Fast path: memchr for '\n'. Quote-aware path: state machine that
-/// skips newlines inside quoted fields.
-fn next_row_start(data: &[u8], from: usize, quote_aware: bool, quote: Option<u8>) -> Option<usize> {
+/// skips newlines inside quoted fields. As in `sniff::split_quoted`, a quote
+/// opens a quoted field only at the start of a field; a bare quote mid-field
+/// (`55" screen`) is literal, so it can't swallow the rest of the file.
+fn next_row_start(
+    data: &[u8],
+    from: usize,
+    quote_aware: bool,
+    quote: Option<u8>,
+    delim: u8,
+) -> Option<usize> {
     if !quote_aware {
         let nl = memchr::memchr(b'\n', &data[from..])?;
         let next = from + nl + 1;
@@ -339,14 +365,24 @@ fn next_row_start(data: &[u8], from: usize, quote_aware: bool, quote: Option<u8>
     let mut i = from;
     // memchr2 jumps between the only bytes that matter (quote / newline)
     // instead of walking every byte; this loop is the indexing hot path for
-    // quoted files.
+    // quoted files. Field starts are found by looking one byte back rather
+    // than stopping at every delimiter: outside quotes, a quote begins a field
+    // exactly when it is at the row start or right after a delimiter.
     while let Some(off) = memchr::memchr2(q, b'\n', &data[i..]) {
         let j = i + off;
-        if data[j] == q {
-            in_quotes = !in_quotes;
-        } else if !in_quotes {
+        if in_quotes {
+            if data[j] == q {
+                if data.get(j + 1) == Some(&q) {
+                    i = j + 2; // escaped "" stays inside the quotes
+                    continue;
+                }
+                in_quotes = false;
+            }
+        } else if data[j] == b'\n' {
             let next = j + 1;
             return (next < data.len()).then_some(next);
+        } else if j == from || data[j - 1] == delim {
+            in_quotes = true;
         }
         i = j + 1;
     }
@@ -453,6 +489,49 @@ mod tests {
         let s = store_from("x\ty\n1\t2\n");
         assert_eq!(s.dialect.delimiter, b'\t');
         assert_eq!(s.raw(0, 1).as_str(), Some("2"));
+    }
+
+    #[test]
+    fn tsv_bare_quotes_mid_field_are_literal() {
+        // Regression: a bare `"` (inch mark) used to switch on quote-aware
+        // indexing and merge every following row into one.
+        let s = store_from("item\tsize\nTV\t55\" screen\nphone\t6\"\nlaptop\t15\n");
+        assert_eq!(s.len(), 3);
+        assert_eq!(s.raw(0, 1).as_str(), Some("55\" screen"));
+        assert_eq!(s.raw(1, 0).as_str(), Some("phone"));
+        assert_eq!(s.raw(1, 1).as_str(), Some("6\""));
+        assert_eq!(s.raw(2, 1).as_str(), Some("15"));
+    }
+
+    #[test]
+    fn stray_quote_does_not_swallow_large_file() {
+        let mut content = String::from("id\tnote\n1\t12\" ruler\n");
+        for i in 2..=25_000 {
+            content.push_str(&format!("{}\tplain\n", i));
+        }
+        let s = store_from(&content);
+        assert_eq!(s.len(), 25_000);
+        assert_eq!(s.raw(24_999, 0).as_str(), Some("25000"));
+    }
+
+    #[test]
+    fn mixed_quoted_fields_and_bare_quotes() {
+        // field-start quotes still quote (embedded tab/newline/escaped quote),
+        // while a mid-field quote in the same file stays literal
+        let s = store_from("a\tb\n\"x\ty\nz\"\t1\n5\" pipe\t2\n\"say \"\"hi\"\"\"\t3\n");
+        assert_eq!(s.len(), 3);
+        assert_eq!(s.raw(0, 0).as_str(), Some("x\ty\nz"));
+        assert_eq!(s.raw(1, 0).as_str(), Some("5\" pipe"));
+        assert_eq!(s.raw(2, 0).as_str(), Some("say \"hi\""));
+        assert_eq!(s.raw(2, 1).as_str(), Some("3"));
+    }
+
+    #[test]
+    fn csv_mid_field_quote_with_quoted_rows() {
+        let s = store_from("a,b\n\"p\nq\",1\n12\" ruler,2\nlast,3\n");
+        assert_eq!(s.len(), 3);
+        assert_eq!(s.raw(1, 0).as_str(), Some("12\" ruler"));
+        assert_eq!(s.raw(2, 1).as_str(), Some("3"));
     }
 
     #[test]

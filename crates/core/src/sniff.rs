@@ -54,7 +54,14 @@ pub fn sniff(sample: &[u8], forced_delim: Option<u8>) -> Dialect {
         None => detect_delimiter(&lines),
     };
 
-    let uses_quotes = lines.iter().any(|l| l.contains('"'));
+    // Only a quote at the start of a field opens quoting (RFC 4180, and what
+    // the csv crate does on the streaming path). A bare quote mid-field, e.g.
+    // `55" screen`, is literal and must not switch on quote-aware indexing.
+    let uses_quotes = lines.iter().any(|l| {
+        split_quoted(l, delimiter, Some(b'"'))
+            .iter()
+            .any(|f| f.starts_with('"'))
+    });
     let quote = uses_quotes.then_some(b'"');
     let has_header = detect_header(&lines, delimiter, quote);
 
@@ -111,22 +118,36 @@ fn score_delimiter(lines: &[&str], delim: u8) -> f64 {
     consistency * 100.0 - var * 10.0 + mean.min(30.0)
 }
 
-/// Split one line on `delim`, honoring double-quote quoting.
+/// Split one line on `delim`, honoring double-quote quoting. A quote opens a
+/// quoted section only at the start of a field; elsewhere it is literal.
+/// Inside a quoted section a doubled quote is an escaped quote.
 pub fn split_quoted<'a>(line: &'a str, delim: u8, quote: Option<u8>) -> Vec<&'a str> {
     let bytes = line.as_bytes();
     let mut fields = Vec::new();
     let mut start = 0usize;
     let mut in_quotes = false;
-    let q = quote.unwrap_or(0);
+    let mut field_start = true;
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if quote.is_some() && b == q {
-            in_quotes = !in_quotes;
-        } else if b == delim && !in_quotes {
+        if in_quotes {
+            if Some(b) == quote {
+                if bytes.get(i + 1).copied() == quote {
+                    i += 2;
+                    continue;
+                }
+                in_quotes = false;
+            }
+        } else if b == delim {
             fields.push(&line[start..i]);
             start = i + 1;
+            field_start = true;
+            i += 1;
+            continue;
+        } else if field_start && Some(b) == quote {
+            in_quotes = true;
         }
+        field_start = false;
         i += 1;
     }
     fields.push(&line[start..]);
@@ -240,6 +261,27 @@ mod tests {
             vec!["\"a,b\"", "c"]
         );
         assert_eq!(split_quoted("", b',', None), vec![""]);
+    }
+
+    #[test]
+    fn split_quoted_mid_field_quote_is_literal() {
+        assert_eq!(
+            split_quoted("TV\t55\" screen\tx", b'\t', Some(b'"')),
+            vec!["TV", "55\" screen", "x"]
+        );
+        assert_eq!(
+            split_quoted("\"a\"\"b\tc\"\td", b'\t', Some(b'"')),
+            vec!["\"a\"\"b\tc\"", "d"]
+        );
+    }
+
+    #[test]
+    fn mid_field_quotes_dont_enable_quoting() {
+        let d = sniff(b"item\tsize\nTV\t55\" screen\nphone\t6\"\n", None);
+        assert_eq!(d.delimiter, b'\t');
+        assert!(!d.uses_quotes);
+        let d = sniff(b"a\tb\n\"x\ty\"\t2\n", None);
+        assert!(d.uses_quotes);
     }
 
     #[test]
