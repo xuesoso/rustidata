@@ -92,7 +92,23 @@ fn detect_delimiter(lines: &[&str]) -> u8 {
             best = (cand, score);
         }
     }
+    // None of the usual delimiters appear: fall back to a single space, but
+    // only when every line has the same field count (prose has ragged counts).
+    if best.1 <= f64::MIN + 1.0 && space_is_consistent(lines) {
+        return b' ';
+    }
     best.0
+}
+
+fn space_is_consistent(lines: &[&str]) -> bool {
+    let mut counts = lines
+        .iter()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.split(' ').count());
+    match counts.next() {
+        Some(first) if first > 1 => counts.all(|c| c == first),
+        _ => false,
+    }
 }
 
 /// Score: high when the delimiter yields the same field count (>1) on every
@@ -214,6 +230,22 @@ mod tests {
     fn sniffs_tab() {
         let d = sniff(b"a\tb\tc\n1\t2\t3\n", None);
         assert_eq!(d.delimiter, b'\t');
+    }
+
+    #[test]
+    fn sniffs_space_when_no_other_delimiter() {
+        let d = sniff(
+            b"0 0 1021440 chr1_0_1021440\n1 1021440 1167918 chr1_1021440_1167918\n",
+            None,
+        );
+        assert_eq!(d.delimiter, b' ');
+        assert!(!d.has_header);
+    }
+
+    #[test]
+    fn ragged_prose_not_split_on_space() {
+        let d = sniff(b"hello world\nthis is a line\nanother\n", None);
+        assert_eq!(d.delimiter, b',');
     }
 
     #[test]
