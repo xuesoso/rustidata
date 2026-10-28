@@ -46,12 +46,20 @@ const CANDIDATES: &[u8] = b",\t;|";
 /// `forced_delim` skips delimiter detection but still runs header/quote
 /// detection.
 pub fn sniff(sample: &[u8], forced_delim: Option<u8>) -> Dialect {
+    sniff_with(sample, forced_delim, false)
+}
+
+/// Like `sniff`, but `space_fallback` also allows a single space as the
+/// delimiter when none of the usual candidates appear. Callers enable it only
+/// for `.tsv` files (see `allows_space_delimiter`): elsewhere, one-column
+/// data such as `full name` / `John Smith` would wrongly split on spaces.
+pub fn sniff_with(sample: &[u8], forced_delim: Option<u8>, space_fallback: bool) -> Dialect {
     let text = String::from_utf8_lossy(sample);
     let lines = complete_lines(&text);
 
     let delimiter = match forced_delim {
         Some(d) => d,
-        None => detect_delimiter(&lines),
+        None => detect_delimiter(&lines, space_fallback),
     };
 
     // Only a quote at the start of a field opens quoting (RFC 4180, and what
@@ -84,7 +92,16 @@ fn complete_lines(text: &str) -> Vec<&str> {
     lines
 }
 
-fn detect_delimiter(lines: &[&str]) -> u8 {
+/// Whether a file may be sniffed as space-delimited: only `.tsv` files
+/// (compressed ones too, e.g. `x.tsv.gz`), which are sometimes written with
+/// spaces instead of tabs.
+pub fn allows_space_delimiter(path: &std::path::Path) -> bool {
+    crate::decompress::inner_path(path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("tsv"))
+}
+
+fn detect_delimiter(lines: &[&str], space_fallback: bool) -> u8 {
     let mut best = (b',', f64::MIN);
     for &cand in CANDIDATES {
         let score = score_delimiter(lines, cand);
@@ -94,7 +111,7 @@ fn detect_delimiter(lines: &[&str]) -> u8 {
     }
     // None of the usual delimiters appear: fall back to a single space, but
     // only when every line has the same field count (prose has ragged counts).
-    if best.1 <= f64::MIN + 1.0 && space_is_consistent(lines) {
+    if space_fallback && best.1 <= f64::MIN + 1.0 && space_is_consistent(lines) {
         return b' ';
     }
     best.0
@@ -234,9 +251,10 @@ mod tests {
 
     #[test]
     fn sniffs_space_when_no_other_delimiter() {
-        let d = sniff(
+        let d = sniff_with(
             b"0 0 1021440 chr1_0_1021440\n1 1021440 1167918 chr1_1021440_1167918\n",
             None,
+            true,
         );
         assert_eq!(d.delimiter, b' ');
         assert!(!d.has_header);
@@ -244,8 +262,33 @@ mod tests {
 
     #[test]
     fn ragged_prose_not_split_on_space() {
-        let d = sniff(b"hello world\nthis is a line\nanother\n", None);
+        let d = sniff_with(b"hello world\nthis is a line\nanother\n", None, true);
         assert_eq!(d.delimiter, b',');
+    }
+
+    #[test]
+    fn no_space_fallback_unless_enabled() {
+        // Regression: one-column data with consistent word counts was split
+        // on spaces in every file type.
+        let d = sniff(b"full name\nJohn Smith\nJane Doe\n", None);
+        assert_eq!(d.delimiter, b',');
+        let d = sniff(b"2024-01-01 10:00:00\n2024-01-02 11:30:00\n", None);
+        assert_eq!(d.delimiter, b',');
+        let d = sniff(b"Full Name\n", None);
+        assert_eq!(d.delimiter, b',');
+    }
+
+    #[test]
+    fn space_delimiter_only_for_tsv_paths() {
+        use std::path::Path;
+        assert!(allows_space_delimiter(Path::new("a.tsv")));
+        assert!(allows_space_delimiter(Path::new("dir/A.TSV")));
+        assert!(allows_space_delimiter(Path::new("a.tsv.gz")));
+        assert!(!allows_space_delimiter(Path::new("a.csv")));
+        assert!(!allows_space_delimiter(Path::new("a.csv.gz")));
+        assert!(!allows_space_delimiter(Path::new("a.tab")));
+        assert!(!allows_space_delimiter(Path::new("a.txt")));
+        assert!(!allows_space_delimiter(Path::new("data")));
     }
 
     #[test]

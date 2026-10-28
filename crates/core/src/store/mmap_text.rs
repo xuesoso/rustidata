@@ -100,12 +100,23 @@ impl MmapTextStore {
         let mmap = unsafe { Mmap::map(&file)? };
         #[cfg(unix)]
         let _ = mmap.advise(memmap2::Advice::Sequential);
-        Ok(Self::from_mmap(mmap, forced_delim, forced_header))
+        let space_fallback = sniff::allows_space_delimiter(path);
+        Ok(Self::from_mmap(
+            mmap,
+            forced_delim,
+            forced_header,
+            space_fallback,
+        ))
     }
 
-    pub fn from_mmap(mmap: Mmap, forced_delim: Option<u8>, forced_header: Option<bool>) -> Self {
+    pub fn from_mmap(
+        mmap: Mmap,
+        forced_delim: Option<u8>,
+        forced_header: Option<bool>,
+        space_fallback: bool,
+    ) -> Self {
         let sample = &mmap[..mmap.len().min(SNIFF_BYTES)];
-        let mut dialect = sniff::sniff(sample, forced_delim);
+        let mut dialect = sniff::sniff_with(sample, forced_delim, space_fallback);
         if let Some(h) = forced_header {
             dialect.has_header = h;
         }
@@ -482,6 +493,26 @@ mod tests {
         let s = store_from("a,b\n1,2\n3,4");
         assert_eq!(s.len(), 2);
         assert_eq!(s.raw(1, 1).as_str(), Some("4"));
+    }
+
+    fn store_with_name(name: &str, content: &str) -> MmapTextStore {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join(name);
+        std::fs::write(&p, content).unwrap();
+        let store = MmapTextStore::open(&p, None).unwrap();
+        store.index_remainder(&AtomicBool::new(false), || {});
+        store
+    }
+
+    #[test]
+    fn space_delimited_only_for_tsv_extension() {
+        let s = store_with_name("a.tsv", "chrom start end\nchr1 0 100\n");
+        assert_eq!(s.headers, vec!["chrom", "start", "end"]);
+        assert_eq!(s.raw(0, 2).as_str(), Some("100"));
+
+        let s = store_with_name("a.csv", "full name\nJohn Smith\nJane Doe\n");
+        assert_eq!(s.headers, vec!["full name"]);
+        assert_eq!(s.raw(1, 0).as_str(), Some("Jane Doe"));
     }
 
     #[test]

@@ -65,7 +65,7 @@ pub fn load_streaming(path: &Path, opts: &Options, notify: Notify) -> Result<She
 pub fn load_reader(
     mut reader: Box<dyn Read + Send>,
     name: String,
-    _origin: Option<std::path::PathBuf>,
+    origin: Option<std::path::PathBuf>,
     opts: &Options,
     notify: Notify,
 ) -> Result<Sheet> {
@@ -80,7 +80,8 @@ pub fn load_reader(
         filled += n;
     }
     head.truncate(filled);
-    let dialect = sniff::sniff(&head, opts.forced_delimiter());
+    let space_fallback = origin.as_deref().is_some_and(sniff::allows_space_delimiter);
+    let dialect = sniff::sniff_with(&head, opts.forced_delimiter(), space_fallback);
     let has_header = match opts.header {
         HeaderMode::Always => true,
         HeaderMode::Never => false,
